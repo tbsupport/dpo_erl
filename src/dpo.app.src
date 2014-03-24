@@ -1,0 +1,9 @@
+{application, dpo,
+[{description, "DPO translations"},
+ {vsn, git},
+ {modules, []},
+ {registered, [dpo_server]},
+ {applications, [kernel, stdlib, lager]},
+ {mod, {dpo_app, []}}
+]}.
+

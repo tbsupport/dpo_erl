@@ -1,0 +1,9 @@
+    {
+        varnish_host, "http://var1.teachbase.ru"
+    }.
+    {
+        api_admin_login, "dpobro"
+    }.
+    {
+        api_admin_pass_hash, "c34f2f81d97b0626ba43cc02ae746873"
+    }.
