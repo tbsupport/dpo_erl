@@ -294,7 +294,7 @@ authorization_test_() ->
     
 
 setup_() ->
-  application:start(lager),
+  lager:start(),
   dpo:start().
 
 cleanup_(_) ->
