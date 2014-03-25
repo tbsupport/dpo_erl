@@ -9,7 +9,8 @@
 
 -export([publish/2,connect/2]).
 
-publish(#rtmp_session{host = <<"dpo">>=Host} = Session, #rtmp_funcall{args = [null, Name |_]} = AMF) ->
+publish(#rtmp_session{host = <<"dpo">>=Host} = Session, #rtmp_funcall{args = [null, OrigName |_]} = AMF) ->
+  Name = extract_name(OrigName),
   case dpo_server:authorize_publish(Name,Session,self()) of
     ok -> 
       lager:info([{kind,access}],"STREAM_PUBLISH ~p ~p~n",[Host,Name]),
@@ -18,7 +19,8 @@ publish(#rtmp_session{host = <<"dpo">>=Host} = Session, #rtmp_funcall{args = [nu
       reject_publish(Session,AMF)
   end;
 
-publish(#rtmp_session{host = <<"hls">>=Host} = Session, #rtmp_funcall{args = [null, Name|_]} = AMF) ->
+publish(#rtmp_session{host = <<"hls">>=Host} = Session, #rtmp_funcall{args = [null, OrigName|_]} = AMF) ->
+  Name = extract_name(OrigName),
   case dpo_server:authorize_publish(Name,Session,self()) of
     ok -> 
       lager:info([{kind,access}],"STREAM_PUBLISH ~p ~p~n",[Host,Name]),
@@ -46,6 +48,18 @@ reject_publish(#rtmp_session{host = Host} = Session,#rtmp_funcall{args = [null, 
   lager:info([{kind,access}],"STREAM_REJECT ~p ~p~n",[Host,Name]),
   rtmp_session:reject_connection(Session).
 
+%% @doc Remove query params from stream name
+%% @end
+
+-spec extract_name(binary()) -> binary().
+
+extract_name(Name) ->
+  {ok, Re} = re:compile("^([^\\?]+)\\?.+$"),
+  case re:run(Name, Re, [{capture, all, binary}]) of
+    {match, [_,Name2]} -> Name2;
+    _ -> Name
+  end.
+
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -64,6 +78,10 @@ cleanup_(_) ->
   meck:unload(rtmp_session),
   application:stop(lager),
   dpo:stop().
+
+extract_name_test() ->
+  ?assertEqual(<<"path/name">>,extract_name(<<"path/name?var1=1&var2=2">>)),
+  ?assertEqual(<<"path/name">>,extract_name(<<"path/name">>)).
 
 
 publish_dpo_test_() ->
