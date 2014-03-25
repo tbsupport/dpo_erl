@@ -78,7 +78,7 @@ handle_api_request(["admin","translations","finish"], #api_client{permissions = 
 %% @end
 
 handle_api_request(["translations"], #api_client{permissions = admin, method = 'GET'}) ->
-  List = [ [{id,Id},{name,list_to_binary(Name)},{url,URL}] || #translation{id=Id,name=Name,play_url=URL} <- dpo_server:list()],
+  List = [ [{id,Id},{name,list_to_binary(Name)},{url,URL},{live,Live}] || #translation{id=Id,name=Name,play_url=URL,live=Live} <- dpo_server:list()],
   #api_response{status = success, data = List};
 
 handle_api_request(_Any, _Client) ->
