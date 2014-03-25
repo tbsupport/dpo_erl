@@ -23,21 +23,22 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_event/2, handle_info/2, terminate/2, code_change/3]).
 
 start_link() ->
-  gen_server:start_link({local,?MODULE}, ?MODULE, [], []).
+  Pid = spawn_link(?MODULE, listen, []),
+  {ok,Pid}.
 
 %% @private
 
 listen() ->
   case code:is_loaded(ems_event) of
-    {file, _} -> ems_event:add_sup_handler(?MODULE, []),
-      receive
-        Msg -> ?D({listen, Msg})
-      end;
-    _ -> ?D("ems_event is not loaded!")
+    {file, _} -> ems_event:add_sup_handler(?MODULE, []);
+    _ -> ?E("ems_event is not loaded!")
+  end,
+  receive
+    Msg -> ?I({listen, Msg})
   end.
 
 init([]) ->
-  listen(),
+  ?I({listener_set}),
   {ok, []}.
 
 
