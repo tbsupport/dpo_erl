@@ -77,7 +77,7 @@ handle_api_request(["admin","translations","finish"], #api_client{permissions = 
 %% @doc List all streams 
 %% @end
 
-handle_api_request(["admin","translations"], #api_client{permissions = admin, method = 'GET'}) ->
+handle_api_request(["translations"], #api_client{permissions = admin, method = 'GET'}) ->
   List = [ [{id,Id},{name,list_to_binary(Name)},{url,URL}] || #translation{id=Id,name=Name,play_url=URL} <- dpo_server:list()],
   #api_response{status = success, data = List};
 
@@ -109,7 +109,7 @@ check_auth(Name, Pass) ->
   end.
 
 api_response_to_proplist(#api_response{status = Status, data = Data}) ->
-  [{status, status_code(Status)},{data,Data}].
+  {[{status, status_code(Status)},{data,Data}]}.
 
 status_code(success) -> 200;
 status_code(invalid) -> 403;
@@ -169,6 +169,13 @@ api_test_() ->
     {"Finish unregistered stream", ?setup(fun finish_unreg_stream_t_/1)}
   ].
 
+json_response_test_() ->
+  [
+    {"HTTP Add stream name", ?setup(fun http_add_name_t_/1)},
+    {"HTTP Wrong auth", ?setup(fun http_wrong_auth_t_/1)},
+    {"HTTP Finish unregistered stream", ?setup(fun http_finish_unreg_stream_t_/1)}
+  ].
+
 auth_test_() ->
   [
     {"Wrong auth", ?setup(fun wrong_auth_t_/1)}
@@ -200,5 +207,23 @@ finish_unreg_stream_t_(_) ->
     ?_assertMatch(#api_response{status=invalid},handle_api_request(["admin","translations","finish"],#api_client{method='POST',request = ?req([{"api_admin_login",<<"admin">>},{"api_admin_pass",<<"admin">>},{"name",<<"path/test">>}])}))
   ].
 
+http_wrong_auth_t_(_) ->
+  [JSON] = http(<<>>,'GET', ["api","dpo","admin","translations"],?req([])),
+  [
+    ?_assertEqual(<<"{\"status\":401,\"data\":\"not_authorized\"}">>,JSON)
+  ].
+
+
+http_add_name_t_(_) ->
+  [JSON] = http(<<>>,'POST', ["api","dpo","admin","translations"],?req([{"api_admin_login",<<"admin">>},{"api_admin_pass",<<"admin">>},{"name",<<"path/to/test">>}])),
+  [
+    ?_assertMatch(<<"{\"status\":200,\"data\":",_Rest/binary>>,JSON)
+  ].
+
+http_finish_unreg_stream_t_(_) ->
+  [JSON] = http(<<>>,'POST', ["api","dpo","admin","translations","finish"],?req([{"api_admin_login",<<"admin">>},{"api_admin_pass",<<"admin">>},{"name",<<"path/to/test">>}])),
+  [
+    ?_assertMatch(<<"{\"status\":403,\"data\":",_Rest/binary>>,JSON)
+  ].
 
 -endif.
