@@ -77,12 +77,12 @@ handle_api_request(["admin","translations","finish"], #api_client{permissions = 
 %% @doc List all streams 
 %% @end
 
-handle_api_request(["translations"], #api_client{permissions = admin, method = 'GET'}) ->
-  List = [ [{id,Id},{name,list_to_binary(Name)},{url,URL},{live,Live}] || #translation{id=Id,name=Name,play_url=URL,live=Live} <- dpo_server:list()],
+handle_api_request(["translations"], #api_client{method = 'GET'}) ->
+  List = [ {[{id,Id},{name,list_to_binary(Name)},{url,URL},{live,Live}]} || #translation{id=Id,name=Name,play_url=URL,live=Live} <- dpo_server:list()],
   #api_response{status = success, data = List};
 
 handle_api_request(_Any, _Client) ->
-  #api_response{status = invalid}.
+  #api_response{status = invalid, data = unknown}.
 
 
 
@@ -171,9 +171,11 @@ api_test_() ->
 
 json_response_test_() ->
   [
-    {"HTTP Add stream name", ?setup(fun http_add_name_t_/1)},
-    {"HTTP Wrong auth", ?setup(fun http_wrong_auth_t_/1)},
-    {"HTTP Finish unregistered stream", ?setup(fun http_finish_unreg_stream_t_/1)}
+    {"HTTP add stream name", ?setup(fun http_add_name_t_/1)},
+    {"HTTP wrong auth", ?setup(fun http_wrong_auth_t_/1)},
+    {"HTTP finish unregistered stream", ?setup(fun http_finish_unreg_stream_t_/1)},
+    {"HTTP empty list", ?setup(fun http_empty_list_t_/1)},
+    {"HTTP list translations", ?setup(fun http_list_t_/1)}
   ].
 
 auth_test_() ->
@@ -224,6 +226,21 @@ http_finish_unreg_stream_t_(_) ->
   [JSON] = http(<<>>,'POST', ["api","dpo","admin","translations","finish"],?req([{"api_admin_login",<<"admin">>},{"api_admin_pass",<<"admin">>},{"name",<<"path/to/test">>}])),
   [
     ?_assertMatch(<<"{\"status\":403,\"data\":",_Rest/binary>>,JSON)
+  ].
+
+http_empty_list_t_(_) ->
+  [JSON] = http(<<>>,'GET', ["api","dpo","translations"],?req([])),
+  [
+    ?_assertEqual(<<"{\"status\":200,\"data\":[]}">>,JSON)
+  ].
+
+http_list_t_(_) ->
+  application:set_env(dpo, varnish_host,"http://localhost"),
+  dpo_server:add("path/test"),
+  [JSON] = http(<<>>,'GET', ["api","dpo","translations"],?req([])),
+  ?I({json,JSON}),
+  [
+    ?_assertEqual(<<"{\"status\":200,\"data\":[{\"id\":1,\"name\":\"path/test\",\"url\":\"http://localhost/hls/path/test.m3u8\",\"live\":false}]}">>,JSON)
   ].
 
 -endif.
