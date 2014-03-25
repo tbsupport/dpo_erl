@@ -94,7 +94,10 @@ add(Name) ->
 %% @doc Check whether stream is registered and if so add session info to it  
 %% @end
 
--spec authorize_publish(string(), #rtmp_session{}, pid()) -> {ok,PlayUrl::string()} | {error,Reason::atom()}.
+-spec authorize_publish(string()|binary(), #rtmp_session{}, pid()) -> {ok,PlayUrl::string()} | {error,Reason::atom()}.
+
+authorize_publish(Name,Session,Pid) when is_binary(Name) ->
+  authorize_publish(binary_to_list(Name),Session,Pid);
 
 authorize_publish(Name,#rtmp_session{socket = Socket, session_id = SessionId},Pid) ->
   gen_server:call(?MODULE,{authorize, Name, SessionId, Socket, Pid}).
@@ -123,7 +126,7 @@ handle_call({add, Name}, _, #state{count=Count}=State) ->
   case find_(Name) of
     {ok, _Rec} -> 
       ?D({stream_exists}),
-      {reply, {error, eexists}, State};
+      {reply, {error, already_exist}, State};
     undefined ->
       Url = play_url(Name),
       NewStream = #translation{name = Name, id = Count, play_url = Url},
@@ -294,10 +297,13 @@ authorization_test_() ->
     
 
 setup_() ->
+  meck:new(rtmp_session,[non_strict]),
+  meck:expect(rtmp_session, reject_connection, fun(_X) -> dpo_server:stream_stopped(?TPID) end),
   lager:start(),
   dpo:start().
 
 cleanup_(_) ->
+  meck:unload(rtmp_session),
   application:stop(lager),
   dpo:stop().
 
@@ -317,7 +323,7 @@ add_stream_params_t_(_) ->
 add_dup_stream_t_(_) ->
   {ok,_} = dpo_server:add("test"),
   [
-    ?_assertEqual({error, eexists}, dpo_server:add("test"))
+    ?_assertEqual({error, already_exist}, dpo_server:add("test"))
   ].
 
 list_streams_t_(_) ->
@@ -370,8 +376,6 @@ stop_live_stream_t_(_) ->
   ].
 
 close_live_stream_t_(_) ->
-  meck:new(rtmp_session,[non_strict]),
-  meck:expect(rtmp_session, reject_connection, fun(_X) -> dpo_server:stream_stopped(?TPID) end),
   {ok,_} = dpo_server:add("test"),
   dpo_server:stream_started(?TPID,"test"),
   ok = dpo_server:close("test"),
@@ -391,8 +395,10 @@ finish_live_stream_t_(_) ->
 
 auth_stream_t_(_) ->
   {ok,_} = dpo_server:add("test"),
+  {ok,_} = dpo_server:add("path/to/test"),
   [
     ?_assertEqual(ok, dpo_server:authorize_publish("test",#rtmp_session{session_id=1},?TPID))
+    ,?_assertEqual(ok, dpo_server:authorize_publish("path/to/test",#rtmp_session{session_id=2},?TPID))
   ].
 
 auth_fail_t_(_) ->

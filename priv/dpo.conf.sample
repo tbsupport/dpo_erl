@@ -7,3 +7,6 @@
     {
         api_admin_pass_hash, "c34f2f81d97b0626ba43cc02ae746873"
     }.
+    {
+      name_regexp, "^[^\\/][\\w\\d\\_\\-\\/]+[^\\/]$"
+    }.
