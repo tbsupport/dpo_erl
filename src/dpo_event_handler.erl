@@ -30,7 +30,7 @@ start_link() ->
 %% @private
 
 listen() ->
-  (catch ?I({ems_event_handler,ems_event:add_sup_handler(?MODULE, [])})),
+  %%(catch ?I({ems_event_handler,ems_event:add_sup_handler(?MODULE, [])})),
   receive
     Msg -> ?E({this_should_not_happen, Msg})
   end.
