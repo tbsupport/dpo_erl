@@ -77,8 +77,7 @@ handle_api_request(["admin","translations","finish"], #api_client{permissions = 
 %% @doc Check stream by name. Request should contain "name" field. 
 %% @end
 
-handle_api_request(["translations","status"], #api_client{method = 'GET', request = Req}) ->
-  Args = Req:parse_qs(),
+handle_api_request(["admin","translations","check"], #api_client{permissions=admin, method = 'POST', post_params = Args}) ->
   Name = proplists:get_value("name",Args),
   case dpo_server:find(Name) of
     {ok,#translation{live = Live, play_url = URL, name = Name_, id = Id}} -> #api_response{status = success, data= {[{id,Id},{name,list_to_binary(Name_)},{url,URL},{live,Live}]} };
@@ -151,7 +150,6 @@ is_valid_name(Name) ->
 setup_() ->
   meck:new(misultin_req,[non_strict]),
   meck:expect(misultin_req, parse_post, fun({misultin_req,List}) -> List end),
-  meck:expect(misultin_req, parse_qs, fun({misultin_req,List}) -> List end),
   meck:expect(misultin_req, ok, fun(_,B,_) -> B end),
   lager:start(),
   dpo:start(),
@@ -260,14 +258,14 @@ http_list_t_(_) ->
 http_status_t_(_) ->
   application:set_env(dpo, varnish_host,"http://localhost"),
   dpo_server:add("path/test"),
-  [JSON] = http(<<>>,'GET', ["api","dpo","translations","status"],?req([{"name",<<"path/test">>}])),
+  [JSON] = http(<<>>,'POST', ["api","dpo","admin","translations","check"],?req([{"name",<<"path/test">>}])),
   ?I({json,JSON}),
   [
     ?_assertEqual(<<"{\"status\":200,\"data\":{\"id\":1,\"name\":\"path/test\",\"url\":\"http://localhost/hls/path/test.m3u8\",\"live\":false}}">>,JSON)
   ].
 
 http_status_not_found_t_(_) ->
-  [JSON] = http(<<>>,'GET', ["api","dpo","translations","status"],?req([{"name",<<"path/test">>}])),
+  [JSON] = http(<<>>,'POST', ["api","dpo","admin","translations","check"],?req([{"name",<<"path/test">>}])),
   ?I({json,JSON}),
   [
     ?_assertEqual(<<"{\"status\":403,\"data\":\"not_found\"}">>,JSON)
