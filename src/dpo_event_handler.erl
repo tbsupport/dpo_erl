@@ -23,22 +23,20 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_event/2, handle_info/2, terminate/2, code_change/3]).
 
 start_link() ->
+  ?I(start_event_sup),
   Pid = spawn_link(?MODULE, listen, []),
   {ok,Pid}.
 
 %% @private
 
 listen() ->
-  case code:is_loaded(ems_event) of
-    {file, _} -> ems_event:add_sup_handler(?MODULE, []);
-    _ -> ?E("ems_event is not loaded!")
-  end,
+  (catch ?I({ems_event_handler,ems_event:add_sup_handler(?MODULE, [])})),
   receive
-    Msg -> ?I({listen, Msg})
+    Msg -> ?E({this_should_not_happen, Msg})
   end.
 
 init([]) ->
-  ?I({listener_set}),
+  ?I("Starting dpo_event_handler"),
   {ok, []}.
 
 
