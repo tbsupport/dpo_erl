@@ -106,7 +106,10 @@ authorize_publish(Name,#rtmp_session{socket = Socket, session_id = SessionId},Pi
 %% @doc Stream started event handler
 %% @end
 
--spec stream_started(pid(), string()) -> ok.
+-spec stream_started(pid(), string()|binary()) -> ok.
+
+stream_started(Media,Name) when is_binary(Name) ->
+  stream_started(Media,binary_to_list(Name));
 
 stream_started(Media, Name) ->
   gen_server:cast(?MODULE,{stream_started,Media,Name}).
@@ -358,7 +361,7 @@ finish_stream_t_(_) ->
 
 add_live_stream_t_(_) ->
   {ok,_} = dpo_server:add("test"),
-  dpo_server:stream_started(?TPID,"test"),
+  dpo_server:stream_started(?TPID,<<"test">>),
   {ok,#translation{live=State}} = dpo_server:find("test"),
   [
     ?_assert(State)
@@ -366,7 +369,7 @@ add_live_stream_t_(_) ->
 
 stop_live_stream_t_(_) ->
   {ok,_} = dpo_server:add("test"),
-  dpo_server:stream_started(?TPID,"test"),
+  dpo_server:stream_started(?TPID,<<"test">>),
   {ok, #translation{live=Was}} = dpo_server:find("test"),
   dpo_server:stream_stopped(?TPID),
   {ok,#translation{live=State}} = dpo_server:find("test"),
@@ -377,7 +380,7 @@ stop_live_stream_t_(_) ->
 
 close_live_stream_t_(_) ->
   {ok,_} = dpo_server:add("test"),
-  dpo_server:stream_started(?TPID,"test"),
+  dpo_server:stream_started(?TPID,<<"test">>),
   ok = dpo_server:close("test"),
   {ok,#translation{live=State}} = dpo_server:find("test"),
   [
@@ -386,7 +389,7 @@ close_live_stream_t_(_) ->
 
 finish_live_stream_t_(_) ->
   {ok,_} = dpo_server:add("test"),
-  dpo_server:stream_started(?TPID,"test"),
+  dpo_server:stream_started(?TPID,<<"test">>),
   ok = dpo_server:finish("test"),
   [
     ?_assertEqual(undefined,dpo_server:find("test"))
@@ -408,7 +411,7 @@ auth_fail_t_(_) ->
 
 auth_fail_started_t_(_) ->
   {ok,_} = dpo_server:add("test"),
-  dpo_server:stream_started(?TPID,"test"),
+  dpo_server:stream_started(?TPID,<<"test">>),
   [
     ?_assertEqual({error,already_started}, dpo_server:authorize_publish("test",#rtmp_session{session_id=1},?TPID))
   ].

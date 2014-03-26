@@ -74,6 +74,17 @@ handle_api_request(["admin","translations","finish"], #api_client{permissions = 
     {error,Error} -> #api_response{status = invalid, data = Error}
   end;
 
+%% @doc Check stream by name. Request should contain "name" field. 
+%% @end
+
+handle_api_request(["translations","status"], #api_client{method = 'GET', request = Req}) ->
+  Args = Req:parse_qs(),
+  Name = proplists:get_value("name",Args),
+  case dpo_server:find(Name) of
+    {ok,#translation{live = Live, play_url = URL, name = Name_, id = Id}} -> #api_response{status = success, data= {[{id,Id},{name,list_to_binary(Name_)},{url,URL},{live,Live}]} };
+    _ -> #api_response{status = invalid, data = not_found}
+  end;
+
 %% @doc List all streams 
 %% @end
 
@@ -135,11 +146,12 @@ is_valid_name(Name) ->
 
 -define(setup(F), {setup, fun setup_/0, fun cleanup_/1, F}).
 
--define(req(Params),{misultin_req, Params}).
+-define(req(Params),{misultin_req, [{"api_admin_login",<<"admin">>},{"api_admin_pass",<<"admin">>}|Params]}).
 
 setup_() ->
   meck:new(misultin_req,[non_strict]),
   meck:expect(misultin_req, parse_post, fun({misultin_req,List}) -> List end),
+  meck:expect(misultin_req, parse_qs, fun({misultin_req,List}) -> List end),
   meck:expect(misultin_req, ok, fun(_,B,_) -> B end),
   lager:start(),
   dpo:start(),
@@ -175,7 +187,9 @@ json_response_test_() ->
     {"HTTP wrong auth", ?setup(fun http_wrong_auth_t_/1)},
     {"HTTP finish unregistered stream", ?setup(fun http_finish_unreg_stream_t_/1)},
     {"HTTP empty list", ?setup(fun http_empty_list_t_/1)},
-    {"HTTP list translations", ?setup(fun http_list_t_/1)}
+    {"HTTP list translations", ?setup(fun http_list_t_/1)},
+    {"HTTP status check", ?setup(fun http_status_t_/1)},
+    {"HTTP status not found", ?setup(fun http_status_not_found_t_/1)}
   ].
 
 auth_test_() ->
@@ -185,45 +199,45 @@ auth_test_() ->
 
 wrong_auth_t_(_) ->
   [
-    ?_assertMatch(#api_response{status=not_authorized},handle_api_request(["admin","translations"],#api_client{method='GET',request = ?req([])}))
+    ?_assertMatch(#api_response{status=not_authorized},handle_api_request(["admin","translations"],#api_client{method='POST',request = {misultin_req,[]}}))
   ].
 
 add_name_t_(_) ->
   [
-    ?_assertMatch(#api_response{status=success},handle_api_request(["admin","translations"],#api_client{method='POST',request = ?req([{"api_admin_login",<<"admin">>},{"api_admin_pass",<<"admin">>},{"name",<<"path/to/test">>}])}))
+    ?_assertMatch(#api_response{status=success},handle_api_request(["admin","translations"],#api_client{method='POST',request = ?req([{"name",<<"path/to/test">>}])}))
   ].
 
 add_invalid_name_t_(_) ->
   [
-    ?_assertMatch(#api_response{status=invalid},handle_api_request(["admin","translations"],#api_client{method='POST',request = ?req([{"api_admin_login",<<"admin">>},{"api_admin_pass",<<"admin">>},{"name",<<"path/to/test.mp4">>}])}))
+    ?_assertMatch(#api_response{status=invalid},handle_api_request(["admin","translations"],#api_client{method='POST',request = ?req([{"name",<<"path/to/test.mp4">>}])}))
   ].
 
 finish_stream_t_(_) ->
   dpo_server:add("path/test"),
   [
-    ?_assertMatch(#api_response{status=success},handle_api_request(["admin","translations","finish"],#api_client{method='POST',request = ?req([{"api_admin_login",<<"admin">>},{"api_admin_pass",<<"admin">>},{"name",<<"path/test">>}])}))
+    ?_assertMatch(#api_response{status=success},handle_api_request(["admin","translations","finish"],#api_client{method='POST',request = ?req([{"name",<<"path/test">>}])}))
   ].
 
 finish_unreg_stream_t_(_) ->
   [
-    ?_assertMatch(#api_response{status=invalid},handle_api_request(["admin","translations","finish"],#api_client{method='POST',request = ?req([{"api_admin_login",<<"admin">>},{"api_admin_pass",<<"admin">>},{"name",<<"path/test">>}])}))
+    ?_assertMatch(#api_response{status=invalid},handle_api_request(["admin","translations","finish"],#api_client{method='POST',request = ?req([{"name",<<"path/test">>}])}))
   ].
 
 http_wrong_auth_t_(_) ->
-  [JSON] = http(<<>>,'GET', ["api","dpo","admin","translations"],?req([])),
+  [JSON] = http(<<>>,'POST', ["api","dpo","admin","translations"],{misultin_req,[]}),
   [
     ?_assertEqual(<<"{\"status\":401,\"data\":\"not_authorized\"}">>,JSON)
   ].
 
 
 http_add_name_t_(_) ->
-  [JSON] = http(<<>>,'POST', ["api","dpo","admin","translations"],?req([{"api_admin_login",<<"admin">>},{"api_admin_pass",<<"admin">>},{"name",<<"path/to/test">>}])),
+  [JSON] = http(<<>>,'POST', ["api","dpo","admin","translations"],?req([{"name",<<"path/to/test">>}])),
   [
     ?_assertMatch(<<"{\"status\":200,\"data\":",_Rest/binary>>,JSON)
   ].
 
 http_finish_unreg_stream_t_(_) ->
-  [JSON] = http(<<>>,'POST', ["api","dpo","admin","translations","finish"],?req([{"api_admin_login",<<"admin">>},{"api_admin_pass",<<"admin">>},{"name",<<"path/to/test">>}])),
+  [JSON] = http(<<>>,'POST', ["api","dpo","admin","translations","finish"],?req([{"name",<<"path/to/test">>}])),
   [
     ?_assertMatch(<<"{\"status\":403,\"data\":",_Rest/binary>>,JSON)
   ].
@@ -241,6 +255,22 @@ http_list_t_(_) ->
   ?I({json,JSON}),
   [
     ?_assertEqual(<<"{\"status\":200,\"data\":[{\"id\":1,\"name\":\"path/test\",\"url\":\"http://localhost/hls/path/test.m3u8\",\"live\":false}]}">>,JSON)
+  ].
+
+http_status_t_(_) ->
+  application:set_env(dpo, varnish_host,"http://localhost"),
+  dpo_server:add("path/test"),
+  [JSON] = http(<<>>,'GET', ["api","dpo","translations","status"],?req([{"name",<<"path/test">>}])),
+  ?I({json,JSON}),
+  [
+    ?_assertEqual(<<"{\"status\":200,\"data\":{\"id\":1,\"name\":\"path/test\",\"url\":\"http://localhost/hls/path/test.m3u8\",\"live\":false}}">>,JSON)
+  ].
+
+http_status_not_found_t_(_) ->
+  [JSON] = http(<<>>,'GET', ["api","dpo","translations","status"],?req([{"name",<<"path/test">>}])),
+  ?I({json,JSON}),
+  [
+    ?_assertEqual(<<"{\"status\":403,\"data\":\"not_found\"}">>,JSON)
   ].
 
 -endif.
