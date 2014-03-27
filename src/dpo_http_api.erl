@@ -76,7 +76,7 @@ handle_api_request(["admin","translations","finish"], #api_client{permissions = 
 %% @doc Check stream by name. Request should contain "name" field. 
 %% @end
 
-handle_api_request(["admin","translations","info"], #api_client{permissions=admin, method = 'POST', params = Params}) ->
+handle_api_request(["admin","translations","info"], #api_client{permissions = admin, method = 'POST', params = Params}) ->
   Name = proplists:get_value("name",Params),
   case dpo_server:find(Name) of
     {ok,#translation{live = Live, play_url = URL, name = Name_, id = Id}} -> #api_response{status = success, data= {[{id,Id},{name,list_to_binary(Name_)},{url,URL},{live,Live}]} };
