@@ -17,13 +17,13 @@
     permissions = user,
     request,
     method,
-    post_params = []
+    params = []
   }).
 
 
 http(_Host, Method, ["api","dpo"|Query], Req) ->
   Response = try
-               handle_api_request(Query, #api_client{permissions = user, request = Req, method = Method})
+               handle_api_request(Query, #api_client{permissions = user, request = Req, method = Method, params = parse_params(Req,Method)})
              catch
                _:Type -> ?D([Type, Query]), #api_response{status = error}
              end,
@@ -38,13 +38,12 @@ http(_Host, _Method, _Path, _Req) ->
 %% All admin requests require login and password
 %% @end
 
-handle_api_request(["admin"|Any], #api_client{permissions = user, request = Req} = Client) ->
-  Args = Req:parse_post(),
-  Name = proplists:get_value("api_admin_login", Args),
-  Pass = proplists:get_value("api_admin_pass", Args),
+handle_api_request(["admin"|_Any] = Path, #api_client{permissions = user, params = Params} = Client) ->
+  Name = proplists:get_value("api_admin_login", Params),
+  Pass = proplists:get_value("api_admin_pass", Params),
   case check_auth(Name, Pass) of
     ok ->
-      handle_api_request(["admin"|Any], Client#api_client{permissions = admin, post_params = Args});
+      handle_api_request(Path, Client#api_client{permissions = admin});
     {error, Reason} ->
       #api_response{status = not_authorized, data = Reason}
   end;
@@ -52,8 +51,8 @@ handle_api_request(["admin"|Any], #api_client{permissions = user, request = Req}
 %% @doc Register new stream. Request should contain "name" field. 
 %% @end
 
-handle_api_request(["admin","translations"], #api_client{permissions = admin, method = 'POST', post_params = Args}) ->
-  Name = proplists:get_value("name",Args),
+handle_api_request(["admin","translations"], #api_client{permissions = admin, method = 'POST', params = Params}) ->
+  Name = proplists:get_value("name",Params),
   Valid = is_valid_name(Name),
   if Valid ->
       case dpo_server:add(Name) of
@@ -67,8 +66,8 @@ handle_api_request(["admin","translations"], #api_client{permissions = admin, me
 %% @doc Finish stream. Request should contain "name" field. 
 %% @end
 
-handle_api_request(["admin","translations","finish"], #api_client{permissions = admin, method = 'POST', post_params = Args}) ->
-  Name = proplists:get_value("name",Args),
+handle_api_request(["admin","translations","finish"], #api_client{permissions = admin, method = 'POST', params = Params}) ->
+  Name = proplists:get_value("name",Params),
   case dpo_server:finish(Name) of
     ok -> #api_response{status = success};
     {error,Error} -> #api_response{status = invalid, data = Error}
@@ -77,8 +76,8 @@ handle_api_request(["admin","translations","finish"], #api_client{permissions = 
 %% @doc Check stream by name. Request should contain "name" field. 
 %% @end
 
-handle_api_request(["admin","translations","check"], #api_client{permissions=admin, method = 'POST', post_params = Args}) ->
-  Name = proplists:get_value("name",Args),
+handle_api_request(["admin","translations","info"], #api_client{permissions=admin, method = 'POST', params = Params}) ->
+  Name = proplists:get_value("name",Params),
   case dpo_server:find(Name) of
     {ok,#translation{live = Live, play_url = URL, name = Name_, id = Id}} -> #api_response{status = success, data= {[{id,Id},{name,list_to_binary(Name_)},{url,URL},{live,Live}]} };
     _ -> #api_response{status = invalid, data = not_found}
@@ -92,11 +91,20 @@ handle_api_request(["translations"], #api_client{method = 'GET'}) ->
   #api_response{status = success, data = List};
 
 handle_api_request(_Any, _Client) ->
+  ?I({unknown_request, _Any}),
   #api_response{status = invalid, data = unknown}.
 
 
 
 %%------------- private ---------------%%
+
+parse_params(Req,'GET') ->
+  Req:parse_qs();
+
+parse_params(Req,'POST') ->
+  Req:parse_post();
+
+parse_params(_,_) -> [].
 
 check_auth(undefined, _) ->
   {error, not_authorized};
@@ -150,6 +158,7 @@ is_valid_name(Name) ->
 setup_() ->
   meck:new(misultin_req,[non_strict]),
   meck:expect(misultin_req, parse_post, fun({misultin_req,List}) -> List end),
+  meck:expect(misultin_req, parse_qs, fun({misultin_req,List}) -> List end),
   meck:expect(misultin_req, ok, fun(_,B,_) -> B end),
   lager:start(),
   dpo:start(),
@@ -192,6 +201,7 @@ json_response_test_() ->
 
 auth_test_() ->
   [
+    {"Success auth", ?setup(fun auth_t_/1)},
     {"Wrong auth", ?setup(fun wrong_auth_t_/1)}
   ].
 
@@ -200,25 +210,30 @@ wrong_auth_t_(_) ->
     ?_assertMatch(#api_response{status=not_authorized},handle_api_request(["admin","translations"],#api_client{method='POST',request = {misultin_req,[]}}))
   ].
 
+auth_t_(_) ->
+  [
+    ?_assertMatch(#api_response{status=success},handle_api_request(["admin","translations"],#api_client{method='POST', params = parse_params(?req([{"name",<<"path/to/test">>}]),'POST')}))
+  ].
+
 add_name_t_(_) ->
   [
-    ?_assertMatch(#api_response{status=success},handle_api_request(["admin","translations"],#api_client{method='POST',request = ?req([{"name",<<"path/to/test">>}])}))
+    ?_assertMatch(#api_response{status=success},handle_api_request(["admin","translations"],#api_client{permissions=admin, method='POST',params = [{"name",<<"path/to/test">>}]}))
   ].
 
 add_invalid_name_t_(_) ->
   [
-    ?_assertMatch(#api_response{status=invalid},handle_api_request(["admin","translations"],#api_client{method='POST',request = ?req([{"name",<<"path/to/test.mp4">>}])}))
+    ?_assertMatch(#api_response{status=invalid},handle_api_request(["admin","translations"],#api_client{permissions=admin, method='POST',params = [{"name",<<"path/to/test.mp4">>}]}))
   ].
 
 finish_stream_t_(_) ->
   dpo_server:add("path/test"),
   [
-    ?_assertMatch(#api_response{status=success},handle_api_request(["admin","translations","finish"],#api_client{method='POST',request = ?req([{"name",<<"path/test">>}])}))
+    ?_assertMatch(#api_response{status=success},handle_api_request(["admin","translations","finish"],#api_client{permissions=admin, method='POST',params = [{"name",<<"path/test">>}]}))
   ].
 
 finish_unreg_stream_t_(_) ->
   [
-    ?_assertMatch(#api_response{status=invalid},handle_api_request(["admin","translations","finish"],#api_client{method='POST',request = ?req([{"name",<<"path/test">>}])}))
+    ?_assertMatch(#api_response{status=invalid},handle_api_request(["admin","translations","finish"],#api_client{permissions=admin, method='POST',params = [{"name",<<"path/test">>}]}))
   ].
 
 http_wrong_auth_t_(_) ->
@@ -258,14 +273,14 @@ http_list_t_(_) ->
 http_status_t_(_) ->
   application:set_env(dpo, varnish_host,"http://localhost"),
   dpo_server:add("path/test"),
-  [JSON] = http(<<>>,'POST', ["api","dpo","admin","translations","check"],?req([{"name",<<"path/test">>}])),
+  [JSON] = http(<<>>,'POST', ["api","dpo","admin","translations","info"],?req([{"name",<<"path/test">>}])),
   ?I({json,JSON}),
   [
     ?_assertEqual(<<"{\"status\":200,\"data\":{\"id\":1,\"name\":\"path/test\",\"url\":\"http://localhost/hls/path/test.m3u8\",\"live\":false}}">>,JSON)
   ].
 
 http_status_not_found_t_(_) ->
-  [JSON] = http(<<>>,'POST', ["api","dpo","admin","translations","check"],?req([{"name",<<"path/test">>}])),
+  [JSON] = http(<<>>,'POST', ["api","dpo","admin","translations","info"],?req([{"name",<<"path/test">>}])),
   ?I({json,JSON}),
   [
     ?_assertEqual(<<"{\"status\":403,\"data\":\"not_found\"}">>,JSON)
