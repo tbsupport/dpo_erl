@@ -177,7 +177,7 @@ handle_task({save_recording,Path,Name,File},#state{aws_bucket=Bucket,aws_dir=Aws
               Res = aws_cli:copy_folder(Path,AWSFullPath),
               case aws_cli:dir_exists(AWSFullPath) of
                 true ->
-                  ?I({delete_dir_and_file, Path, Dir}),
+                  ?I({delete_dir_and_file, Path, Name}),
                   file:delete(File),
                   ulitos_file:recursively_del_dir(Path);
                 false -> ?E({aws_sync_error,Res}),
