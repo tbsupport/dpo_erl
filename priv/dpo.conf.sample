@@ -10,3 +10,15 @@
     {
       name_regexp, "^[^\\/][\\w\\d\\_\\-\\/]+[^\\/]$"
     }.
+    {
+        aws_bucket, "devtbupload"
+    }.
+    {
+        aws_dir, "hls"
+    }.
+    {
+        file_dir, "/var/dpo/content"
+    }.
+    {
+        hls_dir, "/var/dpo/hls"
+    }.

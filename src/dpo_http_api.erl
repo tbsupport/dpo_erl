@@ -70,6 +70,7 @@ handle_api_request(["admin","translations","finish"], #api_client{permissions = 
   Name = proplists:get_value("name",Params),
   case dpo_server:finish(Name) of
     ok -> #api_response{status = success};
+    {ok, URL} -> #api_response{status = success, data = URL};
     {error,Error} -> #api_response{status = invalid, data = Error}
   end;
 

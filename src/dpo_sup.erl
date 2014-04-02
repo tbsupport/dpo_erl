@@ -17,6 +17,13 @@ init([]) ->
 								worker, 
 		 						[]
 		},
+    {dpo_saver, 
+          {dpo_saver, start_link, []},
+                      permanent, 
+                2000, 
+                worker, 
+                []
+    },
 		{dpo_event_handler, 
 				  {dpo_event_handler, start_link, []},
            						permanent, 

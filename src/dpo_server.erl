@@ -145,7 +145,17 @@ handle_call({close, Name},_,State) ->
   {reply,close_(Name),State};
 
 handle_call({finish, Name},_,State) ->
-  {reply,finish_(Name),State};
+  Reply = case finish_(Name) of
+    ok -> 
+      FileName = ulitos:get_var(dpo,file_dir,".")++"/"++Name++".flv",
+      ?I({filename, FileName}),
+      case filelib:is_regular(FileName) of
+        true -> dpo_saver:save_vod_hls(FileName, Name);
+        false -> ok
+      end;
+    Else -> Else
+  end,
+  {reply,Reply,State};
 
 handle_call({list},_,State) ->
   {reply,ets:tab2list(?T_STREAMS),State};
@@ -273,7 +283,9 @@ finish_stream_test_() ->
     {"Close unexisting stream",
       ?setup(fun close_unex_stream_t_/1)},
     {"Finish stream",
-      ?setup(fun finish_stream_t_/1)}
+      ?setup(fun finish_stream_t_/1)},
+    {"Finish record stream",
+      ?setup(fun finish_record_stream_t_/1)}
   ].
 
 live_stream_test_() ->
@@ -302,11 +314,14 @@ authorization_test_() ->
 setup_() ->
   meck:new(rtmp_session,[non_strict]),
   meck:expect(rtmp_session, reject_connection, fun(_X) -> dpo_server:stream_stopped(?TPID) end),
+  meck:new(hls_media,[non_strict]),
+  meck:expect(hls_media, write_vod_hls, fun(_,_,_,_) -> ok end),
   lager:start(),
   dpo:start().
 
 cleanup_(_) ->
   meck:unload(rtmp_session),
+  meck:unload(hls_media),
   application:stop(lager),
   dpo:stop().
 
@@ -393,6 +408,21 @@ finish_live_stream_t_(_) ->
   ok = dpo_server:finish("test"),
   [
     ?_assertEqual(undefined,dpo_server:find("test"))
+  ].
+
+finish_record_stream_t_(_) ->
+  {ok,_} = dpo_server:add("t"),
+  FileDir = code:priv_dir(dpo)++"/tmp",
+  filelib:ensure_dir(FileDir++"/t"),
+  application:set_env(dpo, file_dir, FileDir),
+  Res = file:write_file(FileDir++"/t.flv",[]),
+  application:set_env(dpo, aws_bucket, "b"),
+  application:set_env(dpo, aws_dir, "h"), 
+  dpo_saver:reload(),
+  [
+    ?_assertEqual(ok,Res),
+    ?_assert(filelib:is_regular(FileDir++"/t.flv")),
+    ?_assertEqual({ok, <<"http://b.s3.amazonaws.com/h/t/playlist.m3u8">>},dpo_server:finish("t"))
   ].
 
 
