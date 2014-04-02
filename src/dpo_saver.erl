@@ -173,7 +173,7 @@ handle_info(_Info, State) ->
 handle_task({save_recording,Path,Name},#state{aws_bucket=Bucket,aws_dir=AwsDir}=State) ->
   Reply = case filelib:is_dir(Path) of
             true -> AWSPath = filename:join(AwsDir,Name),
-              AWSFullPath = ?AWS_URL(Bucket,AWSPath),
+              AWSFullPath = "s3://"++Bucket++"/"++AWSPath,
               Res = aws_cli:copy_folder(Path,AWSFullPath),
               case aws_cli:dir_exists(AWSFullPath) of
                 true ->
