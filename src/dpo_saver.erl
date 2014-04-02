@@ -201,6 +201,7 @@ setup_state(#state{queue = Queue}) ->
              false -> ?D({aws_config_not_found,Bucket,Dir}),
                off
            end,
+  ?I({dpo_saver, setup, Bucket, Dir}),
   #state{queue = Queue, status=Status,aws_bucket=Bucket,aws_dir=Dir}.
 
 
