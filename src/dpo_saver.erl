@@ -96,7 +96,7 @@ init([]) ->
 %%--------------------------------------------------------------------
 
 handle_call({save_hls,FileName,Name},_,#state{aws_bucket = Bucket, aws_dir = Dir} = State) ->
-  hls_media:write_vod_hls(FileName, filename:join([ulitos:get_var(dpo, hls_dir,"."),Name]),?HLS_VOD_DURATION, [{playlist, ?PLAYLIST},{stream_name, Name}]),
+  hls_media:write_vod_hls(FileName, filename:join([ulitos:get_var(dpo, hls_dir,"."),Name]),?HLS_VOD_DURATION, [{playlist, ?PLAYLIST},{stream_name, Name},{file_name,FileName}]),
   URL = list_to_binary(?AWS_URL(Bucket, filename:join([Dir,Name,?PLAYLIST++".m3u8"]))),
   ?I({hls_vod_url, URL}),
   {reply, {ok, URL},State};
@@ -146,7 +146,7 @@ handle_cast(_Msg, State) ->
 
 handle_info({hls_complete, Options}, #state{queue = Queue}=State) ->
   ?D({hls_complete, Options}), 
-  NewQueue = queue:in({save_recording, proplists:get_value(path,Options), proplists:get_value(stream_name,Options)},Queue),
+  NewQueue = queue:in({save_recording, proplists:get_value(path,Options), proplists:get_value(stream_name,Options),proplists:get_value(file_name,Options)},Queue),
   self() ! next_task,
   {noreply,State#state{queue = NewQueue}};
 
@@ -170,13 +170,15 @@ handle_info(_Info, State) ->
 
 -spec handle_task(Task::any(),State::#state{}) -> {reply,Reply::any(),NewState::#state{}}.
 
-handle_task({save_recording,Path,Name},#state{aws_bucket=Bucket,aws_dir=AwsDir}=State) ->
+handle_task({save_recording,Path,Name,File},#state{aws_bucket=Bucket,aws_dir=AwsDir}=State) ->
   Reply = case filelib:is_dir(Path) of
             true -> AWSPath = filename:join(AwsDir,Name),
               AWSFullPath = "s3://"++Bucket++"/"++AWSPath,
               Res = aws_cli:copy_folder(Path,AWSFullPath),
               case aws_cli:dir_exists(AWSFullPath) of
                 true ->
+                  ?I({delete_dir_and_file, Path, Dir}),
+                  file:delete(File),
                   ulitos_file:recursively_del_dir(Path);
                 false -> ?E({aws_sync_error,Res}),
                   {error, aws_failed}
