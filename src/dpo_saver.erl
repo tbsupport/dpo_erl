@@ -208,7 +208,7 @@ handle_task(_Task,State) -> {reply,undefined,State}.
 
 -spec setup_state(#state{}) -> #state{}.
 
-setup_state(#state{queue = Queue}) ->
+setup_state(#state{queue = Queue}=State) ->
   Bucket = ulitos:get_var(dpo,aws_bucket,false),
   Dir = ulitos:get_var(dpo,aws_dir,false),
 
@@ -218,7 +218,7 @@ setup_state(#state{queue = Queue}) ->
                off
            end,
   ?I({dpo_saver, setup, Bucket, Dir}),
-  #state{queue = Queue, status=Status,aws_bucket=Bucket,aws_dir=Dir}.
+  State#state{queue = Queue, status=Status,aws_bucket=Bucket,aws_dir=Dir}.
 
 
 %%--------------------------------------------------------------------
