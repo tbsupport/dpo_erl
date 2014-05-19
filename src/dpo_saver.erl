@@ -15,6 +15,11 @@
   terminate/2,
   code_change/3]).
 
+%% private spawned 
+-export([
+  aws_loader/0
+  ]).
+
 -define(SERVER, ?MODULE).
 
 -define(AWS_URL(B,F),"http://"++filename:join([B++".s3.amazonaws.com",F])).
@@ -26,6 +31,8 @@
 -record(state, {
   status = off :: on|off,
   queue = queue:new() ::queue(),
+  loader,
+  loader_busy = false,
   aws_bucket ::string(),
   aws_dir ::string()
 }).
@@ -78,7 +85,8 @@ reload() ->
 %% @end
 %%--------------------------------------------------------------------
 init([]) ->
-  {ok,setup_state(#state{})}.
+  Loader = spawn(?MODULE, aws_loader, []),
+  {ok,setup_state(#state{loader = Loader})}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -144,10 +152,13 @@ handle_cast(_Msg, State) ->
 %%--------------------------------------------------------------------
 
 
-handle_info({hls_complete, Options}, #state{queue = Queue}=State) ->
+handle_info({hls_complete, Options}, #state{queue = Queue, loader_busy = Busy}=State) ->
   ?D({hls_complete, Options}), 
   NewQueue = queue:in({save_recording, proplists:get_value(path,Options), proplists:get_value(stream_name,Options),proplists:get_value(file_name,Options)},Queue),
-  self() ! next_task,
+  if Busy
+    -> ?I({loader_is_busy});
+    true -> self() ! next_task
+  end,
   {noreply,State#state{queue = NewQueue}};
 
 handle_info(next_task,#state{queue = Queue} = State) ->
@@ -159,6 +170,16 @@ handle_info(next_task,#state{queue = Queue} = State) ->
   end,
   {noreply,NewState};
 
+handle_info(loader_busy, #state{loader_busy = false}=State) ->
+  {noreply, State#state{loader_busy = true}};
+
+handle_info(loader_done, #state{loader_busy = true}=State) ->
+  self() ! next_task,
+  {noreply, State#state{loader_busy = false}};
+
+
+handle_info(stop, State) ->
+  {stop, normal, State};
 
 handle_info(_Info, State) ->
   {noreply, State}.
@@ -170,19 +191,12 @@ handle_info(_Info, State) ->
 
 -spec handle_task(Task::any(),State::#state{}) -> {reply,Reply::any(),NewState::#state{}}.
 
-handle_task({save_recording,Path,Name,File},#state{aws_bucket=Bucket,aws_dir=AwsDir}=State) ->
+handle_task({save_recording,Path,Name,File},#state{aws_bucket=Bucket,aws_dir=AwsDir,loader = Loader}=State) ->
   Reply = case filelib:is_dir(Path) of
             true -> AWSPath = filename:join(AwsDir,Name),
               AWSFullPath = "s3://"++Bucket++"/"++AWSPath,
-              Res = aws_cli:copy_folder(Path,AWSFullPath),
-              case aws_cli:dir_exists(AWSFullPath) of
-                true ->
-                  ?I({delete_dir_and_file, Path, Name}),
-                  file:delete(File),
-                  ulitos_file:recursively_del_dir(Path);
-                false -> ?E({aws_sync_error,Res}),
-                  {error, aws_failed}
-              end;
+              Loader ! {self(), save_recording, Path, AWSFullPath, File},
+              ok;
             _ -> ?D({dir_not_found,Path}),
                  {error, enoent}
           end,
@@ -235,6 +249,24 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+
+aws_loader() ->
+  receive
+    {Pid, save_recording, Path, AWSPath, File} -> 
+      Pid ! loader_busy,
+      Res = aws_cli:copy_folder(Path,AWSPath),
+      case aws_cli:dir_exists(AWSPath) of
+        true ->
+          ?I({delete_dir_and_file, Path}),
+          file:delete(File),
+          ulitos_file:recursively_del_dir(Path);
+        false -> 
+          ?E({aws_sync_error,Res})
+      end,
+      Pid ! loader_done
+  end,
+  aws_loader().
 
 
 -ifdef(TEST).
