@@ -17,9 +17,11 @@
 -export([status/0]).
 
 -define(T_STREAMS, dpo_streams).
+-define(D_TRANSLATIONS, dets_translations).
 
 -record(state, {
-  count = 1 ::non_neg_integer()
+  count = 1 ::non_neg_integer(),
+  use_dets = false
 }).
 
 
@@ -29,7 +31,15 @@ start_link() ->
 init([]) ->
   lager:info("Starting dpo_server"),
   ets:new(?T_STREAMS, [private, named_table, {keypos, #translation.name}]),
-  {ok, #state{}}.
+  Res = dets:open_file(?D_TRANSLATIONS, [{keypos, #translation.name},{file,ulitos:get_var(dpo,dets_file,"./dets")}]),
+  UseDets = case Res of 
+    {ok,_} -> ets:from_dets(?T_STREAMS,?D_TRANSLATIONS),
+              ?I({load_from_dets, ets:info(?T_STREAMS)}),
+              true;
+    {error, Reason} -> ?E({failed_load_from_dets, Reason}),
+                        false
+  end,
+  {ok, #state{use_dets = UseDets}}.
 
 
 %% @doc
@@ -134,6 +144,7 @@ handle_call({add, Name}, _, #state{count=Count}=State) ->
       Url = play_url(Name),
       NewStream = #translation{name = Name, id = Count, play_url = Url},
       ets:insert(?T_STREAMS, NewStream),
+      self() ! {add_to_dets, NewStream},
       lager:info([{kind,access}],"REGISTER_STREAM ~p ~s~n", [Count, Name]),
       {reply, {ok, Url}, State#state{count = Count+1}}
   end;
@@ -198,12 +209,32 @@ handle_cast({stream_stopped,Media},State) ->
 handle_cast(Cast, State) ->
   {error, {unknown_cast, Cast}, State}.
 
+handle_info({add_to_dets, _Rec},#state{use_dets = false}=State) ->
+  {noreply, State};
+
+handle_info({add_to_dets, Rec},#state{use_dets = true}=State) ->
+  dets:insert(?D_TRANSLATIONS, Rec),
+  {noreply, State};
+
+handle_info({remove_from_dets, _Name},#state{use_dets = false}=State) ->
+  {noreply, State};
+
+handle_info({remove_from_dets, Name},#state{use_dets = true}=State) ->
+  dets:delete(?D_TRANSLATIONS, Name),
+  {noreply, State};
+
+
 handle_info(stop, State) ->
   {stop, normal, State};
 
 handle_info(Info, State) ->
   ?D({unknown_info, Info}),
   {noreply, State}.
+
+terminate(Reason, #state{use_dets = true}) ->
+  dets:close(ulitos:get_var(dpo,dets_file,"./dets")),
+  ?D({{server_terminates, Reason, close_dets}}),
+  ok;
 
 terminate(_, _) -> ok.
 code_change(_, State, _) -> {ok, State}.
@@ -240,10 +271,12 @@ finish_(Name) ->
     ok -> 
       lager:info([{kind,access}],"FINISH_STREAM ~s~n", [Name]),
       ets:delete(?T_STREAMS,Name),
+      self() ! {remove_from_dets, Name},
       ok;
     {error, not_active} -> 
       lager:info([{kind,access}],"FINISH_STREAM ~s~n", [Name]),
       ets:delete(?T_STREAMS,Name),
+      self() ! {remove_from_dets, Name},
       ok;
     Else -> 
       ?D({finish_failed,Name}),
@@ -263,54 +296,6 @@ play_url_test() ->
   ?assertEqual(<<"http://var1.ru/hls/path/name.m3u8">>,play_url("path/name")),
   ?assertEqual(<<"http://var1.ru/hls/path/name.m3u8">>,play_url(<<"path/name">>)).
 
-add_stream_test_() ->
-  [
-    {"Add normal stream",
-      ?setup(fun add_stream_t_/1)},
-    {"Add stream and check params",
-      ?setup(fun add_stream_params_t_/1)},
-    {"Add duplicate", 
-      ?setup(fun add_dup_stream_t_/1)},
-    {"List streams", 
-      ?setup(fun list_streams_t_/1)}
-  ].
-
-
-finish_stream_test_() ->
-  [
-    {"Close existing stream",
-      ?setup(fun close_stream_t_/1)},
-    {"Close unexisting stream",
-      ?setup(fun close_unex_stream_t_/1)},
-    {"Finish stream",
-      ?setup(fun finish_stream_t_/1)},
-    {"Finish record stream",
-      ?setup(fun finish_record_stream_t_/1)}
-  ].
-
-live_stream_test_() ->
-  [
-    {"Make stream live",
-      ?setup(fun add_live_stream_t_/1)},
-    {"Stop live stream",
-      ?setup(fun stop_live_stream_t_/1)},
-    {"Close live stream",
-      ?setup(fun close_live_stream_t_/1)},
-    {"Finish live stream",
-      ?setup(fun finish_live_stream_t_/1)}
-  ].
-
-authorization_test_() ->
-  [
-    {"Authorize succes",
-      ?setup(fun auth_stream_t_/1)},
-    {"Authorize reject unregistered",
-      ?setup(fun auth_fail_t_/1)},
-    {"Authorize reject started",
-      ?setup(fun auth_fail_started_t_/1)}
-  ].
-    
-
 setup_() ->
   meck:new(rtmp_session,[non_strict]),
   meck:expect(rtmp_session, reject_connection, fun(_X) -> dpo_server:stream_stopped(?TPID) end),
@@ -323,7 +308,20 @@ cleanup_(_) ->
   meck:unload(rtmp_session),
   meck:unload(hls_media),
   application:stop(lager),
+  file:delete(ulitos:get_var(dpo,dets_file,"./dets")),
   dpo:stop().
+
+add_stream_test_() ->
+  [
+    {"Add normal stream",
+      ?setup(fun add_stream_t_/1)},
+    {"Add stream and check params",
+      ?setup(fun add_stream_params_t_/1)},
+    {"Add duplicate", 
+      ?setup(fun add_dup_stream_t_/1)},
+    {"List streams", 
+      ?setup(fun list_streams_t_/1)}
+  ].
 
 add_stream_t_(_) ->
   [
@@ -351,6 +349,18 @@ list_streams_t_(_) ->
     ?_assertEqual(2, length(dpo_server:list()))
   ].
 
+finish_stream_test_() ->
+  [
+    {"Close existing stream",
+      ?setup(fun close_stream_t_/1)},
+    {"Close unexisting stream",
+      ?setup(fun close_unex_stream_t_/1)},
+    {"Finish stream",
+      ?setup(fun finish_stream_t_/1)},
+    {"Finish record stream",
+      ?setup(fun finish_record_stream_t_/1)}
+  ].
+
 close_stream_t_(_) ->
   {ok,_} = dpo_server:add("test"),
   Res = dpo_server:close("test"),
@@ -372,6 +382,33 @@ finish_stream_t_(_) ->
   [
     ?_assertEqual(ok, dpo_server:finish("test"))
     ,?_assertEqual(0, length(dpo_server:list()))
+  ].
+
+finish_record_stream_t_(_) ->
+  {ok,_} = dpo_server:add("t"),
+  FileDir = code:priv_dir(dpo)++"/tmp",
+  filelib:ensure_dir(FileDir++"/t"),
+  application:set_env(dpo, file_dir, FileDir),
+  Res = file:write_file(FileDir++"/t.flv",[]),
+  application:set_env(dpo, aws_bucket, "b"),
+  application:set_env(dpo, aws_dir, "h"), 
+  dpo_saver:reload(),
+  [
+    ?_assertEqual(ok,Res),
+    ?_assert(filelib:is_regular(FileDir++"/t.flv")),
+    ?_assertEqual({ok, <<"http://b.s3.amazonaws.com/h/t/playlist.m3u8">>},dpo_server:finish("t"))
+  ].
+
+live_stream_test_() ->
+  [
+    {"Make stream live",
+      ?setup(fun add_live_stream_t_/1)},
+    {"Stop live stream",
+      ?setup(fun stop_live_stream_t_/1)},
+    {"Close live stream",
+      ?setup(fun close_live_stream_t_/1)},
+    {"Finish live stream",
+      ?setup(fun finish_live_stream_t_/1)}
   ].
 
 add_live_stream_t_(_) ->
@@ -410,21 +447,15 @@ finish_live_stream_t_(_) ->
     ?_assertEqual(undefined,dpo_server:find("test"))
   ].
 
-finish_record_stream_t_(_) ->
-  {ok,_} = dpo_server:add("t"),
-  FileDir = code:priv_dir(dpo)++"/tmp",
-  filelib:ensure_dir(FileDir++"/t"),
-  application:set_env(dpo, file_dir, FileDir),
-  Res = file:write_file(FileDir++"/t.flv",[]),
-  application:set_env(dpo, aws_bucket, "b"),
-  application:set_env(dpo, aws_dir, "h"), 
-  dpo_saver:reload(),
+authorization_test_() ->
   [
-    ?_assertEqual(ok,Res),
-    ?_assert(filelib:is_regular(FileDir++"/t.flv")),
-    ?_assertEqual({ok, <<"http://b.s3.amazonaws.com/h/t/playlist.m3u8">>},dpo_server:finish("t"))
+    {"Authorize succes",
+      ?setup(fun auth_stream_t_/1)},
+    {"Authorize reject unregistered",
+      ?setup(fun auth_fail_t_/1)},
+    {"Authorize reject started",
+      ?setup(fun auth_fail_started_t_/1)}
   ].
-
 
 auth_stream_t_(_) ->
   {ok,_} = dpo_server:add("test"),
@@ -445,5 +476,22 @@ auth_fail_started_t_(_) ->
   [
     ?_assertEqual({error,already_started}, dpo_server:authorize_publish("test",#rtmp_session{session_id=1},?TPID))
   ].
+
+
+dets_test_() ->
+  [
+    {"Load from dets on normal app start",
+      ?setup(fun load_dets_appstart_t_/1)
+    }
+  ].
+
+load_dets_appstart_t_(_) ->
+  dpo_server:add("test"),
+  dpo:stop(),
+  dpo:start(),
+  [
+    ?_assertEqual(1, length(dpo_server:list()))
+  ].
+
 
 -endif.

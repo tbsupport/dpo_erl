@@ -170,6 +170,7 @@ setup_() ->
 cleanup_(_) ->
   meck:unload(misultin_req),
   application:stop(lager),
+  file:delete(ulitos:get_var(dpo,dets_file,"./dets")),
   dpo:stop().
 
 is_valid_name_test() ->

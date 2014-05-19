@@ -22,3 +22,6 @@
     {
         hls_dir, "/var/dpo/hls"
     }.
+    {
+        dets_file, "/var/dpo/dets_translations"
+    }. 

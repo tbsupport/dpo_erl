@@ -77,6 +77,7 @@ cleanup_(_) ->
   meck:unload(apps_recording),
   meck:unload(rtmp_session),
   application:stop(lager),
+  file:delete(ulitos:get_var(dpo,dets_file,"./dets")),
   dpo:stop().
 
 extract_name_test() ->
