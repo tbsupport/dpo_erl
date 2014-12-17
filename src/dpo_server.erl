@@ -12,16 +12,17 @@
 -export([start_link/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
--export([add/1, finish/1, close/1, find/1, list/0, authorize_publish/3, config_reloaded/0]).
--export([stream_started/2, stream_stopped/1]).
+-export([add/3, finish/1, find/1, list/0, publish/1, config_reloaded/0]).
+-export([stream_started/2, stream_stopped/1, user_disconnected/1]).
 -export([status/0]).
 
 -define(T_STREAMS, dpo_streams).
 -define(D_TRANSLATIONS, dets_translations).
 
 -record(state, {
-  count = 1 ::non_neg_integer(),
-  use_dets = false
+  translations = #{} :: #{non_neg_integer() => #translation{}},
+  sid_to_id = #{} :: #{non_neg_integer() => non_neg_integer()},
+  name_to_id = #{} :: #{binary() => non_neg_integer()}
 }).
 
 
@@ -30,16 +31,8 @@ start_link() ->
 
 init([]) ->
   lager:info("Starting dpo_server"),
-  ets:new(?T_STREAMS, [private, named_table, {keypos, #translation.name}]),
-  Res = dets:open_file(?D_TRANSLATIONS, [{keypos, #translation.name},{file,ulitos:get_var(dpo,dets_file,"./dets")}]),
-  UseDets = case Res of 
-    {ok,_} -> ets:from_dets(?T_STREAMS,?D_TRANSLATIONS),
-              ?I({load_from_dets, ets:info(?T_STREAMS)}),
-              true;
-    {error, Reason} -> ?E({failed_load_from_dets, Reason}),
-                        false
-  end,
-  {ok, #state{use_dets = UseDets}}.
+  init_http(),
+  {ok, #state{}}.
 
 
 %% @doc
@@ -51,38 +44,18 @@ init([]) ->
 config_reloaded()->
   ok.
 
-%% @doc Find translation by name.
+%% @doc Find translation by id.
 %% @end
 
--spec find(string()|binary()) -> {ok, #translation{}} | undefined.
-
-find(Name) when is_binary(Name) ->
-  find(binary_to_list(Name));
-
-find(Name) ->
-  gen_server:call(?MODULE,{find,Name}).
-
-%% @doc
-%% Disconnect stream session
-%% @end
-
--spec close(binary()|string()) -> ok|false.
-
-close(Name) when is_binary(Name) ->
-  close(binary_to_list(Name));
-
-close(Name) ->
-  gen_server:call(?MODULE,{close,Name}).
+find(Id) ->
+  gen_server:call(?MODULE,{find, Id}).
 
 %% @doc
 %%  Remove stream from registered list and disconnect
 %% @end
 
-finish(Name) when is_binary(Name) ->
-  finish(binary_to_list(Name));
-
-finish(Name) ->
-  gen_server:call(?MODULE,{finish,Name}).
+finish(Id) ->
+  gen_server:call(?MODULE, {finish, Id}).
 
 status() ->
   ok.
@@ -90,139 +63,117 @@ status() ->
 list() ->
   gen_server:call(?MODULE,{list}).
 
+publish(SessionId) ->
+  gen_server:call(?MODULE, {publish, SessionId}).
+
 %% @doc Add stream to whitelist.
 %% @end
 
--spec add(string()|binary()) -> ok|{error,any()}.
+-spec add(non_neg_integer(), non_neg_integer(), pid()) -> ok|{error,any()}.
 
-add(Name) when is_binary(Name) ->
-  add(binary_to_list(Name));
-
-add(Name) ->
-  gen_server:call(?MODULE, {add, Name}).
-
-%% @doc Check whether stream is registered and if so add session info to it  
-%% @end
-
--spec authorize_publish(string()|binary(), #rtmp_session{}, pid()) -> {ok,PlayUrl::string()} | {error,Reason::atom()}.
-
-authorize_publish(Name,Session,Pid) when is_binary(Name) ->
-  authorize_publish(binary_to_list(Name),Session,Pid);
-
-authorize_publish(Name,#rtmp_session{socket = Socket, session_id = SessionId},Pid) ->
-  gen_server:call(?MODULE,{authorize, Name, SessionId, Socket, Pid}).
-
+add(Id, SessionId, SessionPid) ->
+  gen_server:call(?MODULE, {add, Id, SessionId, SessionPid}).
 
 %% @doc Stream started event handler
 %% @end
 
--spec stream_started(pid(), string()|binary()) -> ok.
+-spec stream_started(binary(), pid()) -> ok.
 
-stream_started(Media,Name) when is_binary(Name) ->
-  stream_started(Media,binary_to_list(Name));
-
-stream_started(Media, Name) ->
-  gen_server:cast(?MODULE,{stream_started,Media,Name}).
+stream_started(Name, Media) ->
+  gen_server:cast(?MODULE, {stream_started, Name, Media}).
 
 %% @doc Stream stopped event handler
 %% @end
 
--spec stream_stopped(pid()) -> ok.
+-spec stream_stopped(binary()) -> ok.
 
-stream_stopped(Media) ->
-  gen_server:cast(?MODULE,{stream_stopped,Media}).
+stream_stopped(Name) ->
+  gen_server:cast(?MODULE,{stream_stopped, Name}).
+
+%% @doc User disconnected event handler
+%% @end
+
+-spec user_disconnected(non_neg_integer()) -> ok.
+
+user_disconnected(SessionId) ->
+  gen_server:cast(?MODULE,{user_disconnected, SessionId}).
 
 
 %%%----------- gen_server handlers ------------%%%
 
-handle_call({add, Name}, _, #state{count=Count}=State) ->
-  case find_(Name) of
-    {ok, _Rec} -> 
-      ?D({stream_exists}),
-      {reply, {error, already_exist}, State};
+handle_call({add, Id, SessionId, SessionPid}, _, #state{translations = Translations, sid_to_id = SidToId} = State) ->
+  case maps:get(Id, Translations, undefined) of
     undefined ->
-      Url = play_url(Name),
-      NewStream = #translation{name = Name, id = Count, play_url = Url},
-      ets:insert(?T_STREAMS, NewStream),
-      self() ! {add_to_dets, NewStream},
-      lager:info([{kind,access}],"REGISTER_STREAM ~p ~s~n", [Count, Name]),
-      {reply, {ok, Url}, State#state{count = Count+1}}
+      Translation = #translation{id = Id, session_id = SessionId, session_pid = SessionPid},
+      {reply, ok, State#state{translations = maps:put(Id, Translation, Translations), sid_to_id = maps:put(SessionId, Id, SidToId)}};
+    #translation{session_id = undefined} = Translation ->
+      {reply, ok, State#state{translations = maps:put(Id, Translation#translation{session_id = SessionId, session_pid = SessionPid}, Translations), sid_to_id = maps:put(SessionId, Id, SidToId)}};
+    #translation{} ->
+      {reply, {error, already_exist}, State}
   end;
 
-handle_call({find, Name},_,State) ->
-  {reply,find_(Name),State};
+handle_call({find, Id}, _, #state{translations = Translations} = State) ->
+  {reply, maps:get(Id, Translations, undefined), State};
 
-handle_call({close, Name},_,State) ->
-  {reply,close_(Name),State};
+handle_call({finish, Id}, _, #state{translations = Translations, sid_to_id = SidToId, name_to_id = NameToId} = State) ->
+  case maps:get(Id, Translations, undefined) of
+    undefined ->
+      {reply, ok, State};
+    #translation{session_id = undefined} ->
+      {reply, ok, State#state{translations = maps:remove(Id, Translations)}};
+    #translation{session_id = Sid, session_pid = SessionPid, filename = Name} ->
+      (catch rtmp_session:reject_connection(SessionPid)),
+      {reply, ok, State#state{translations = maps:remove(Id, Translations), sid_to_id = maps:remove(Sid, SidToId), name_to_id = maps:remove(Name, NameToId)}}
+  end;
 
-handle_call({finish, Name},_,State) ->
-  Reply = case finish_(Name) of
-    ok -> 
-      FileName = ulitos:get_var(dpo,file_dir,".")++"/"++Name++".flv",
-      ?I({filename, FileName}),
-      case filelib:is_regular(FileName) of
-        true -> dpo_saver:save_vod_hls(FileName, Name);
-        false -> ok
-      end;
-    Else -> Else
-  end,
-  {reply,Reply,State};
+handle_call({publish, SessionId}, _, #state{translations = Translations, sid_to_id = SidToId, name_to_id = NameToId} = State) ->
+  Id = maps:get(SessionId, SidToId),
+  case maps:get(Id, Translations) of
+    #translation{filename = undefined} = Translation ->
+      Filename = lists:flatten(io_lib:format("~s/~p.flv", [ulitos_app:get_var(dpo, file_dir, "."), Id])),
+      {reply, Filename, State#state{translations = maps:put(Id, Translation#translation{filename = Filename}, Translations), name_to_id = maps:put(iolist_to_binary(Filename), Id, NameToId)}};
+    #translation{filename = Filename} ->
+      {reply, Filename, State}
+  end;
 
-handle_call({list},_,State) ->
-  {reply,ets:tab2list(?T_STREAMS),State};
-
-handle_call({authorize,Name,SessionId,Socket,Pid},_,State) ->
-  Reply = case find_(Name) of
-    {ok, #translation{live = true}} -> 
-      ?D({already_started,Name}),
-      {error, already_started};
-    {ok, #translation{}=Rec} ->
-      ets:insert(?T_STREAMS, Rec#translation{session_id = SessionId, socket = Socket, session_pid = Pid}),
-      ok;
-    undefined -> 
-      ?D({stream_not_found,Name}),
-      {error, not_found}
-  end,
-  {reply,Reply,State};
+handle_call({list}, _ , #state{translations = Translations} = State) ->
+  {reply, maps:values(Translations), State};
 
 handle_call(Req, _, State) ->
   {error, {unhandled, Req}, State}.
 
-handle_cast({stream_started,Media, Name},State) ->
-  case find_(Name) of
-    {ok, #translation{}=Rec} -> 
-      lager:info([{kind,access}],"START_STREAM ~s~n", [Name]),
-      ets:insert(?T_STREAMS, Rec#translation{media_id = Media, live = true});
-    _ -> ?D({unregistered_stream, Name})
-  end,
-  {noreply,State};
+handle_cast({stream_started, Name, Media}, #state{translations = Translations, name_to_id = NameToId} = State) ->
+  case maps:get(Name, NameToId, undefined) of
+    undefined ->
+      {noreply, State};
+    Id ->
+      lager:info([{kind,access}],"START_STREAM ~p~n", [Id]),
+      Translation = maps:get(Id, Translations),
+      {noreply, State#state{translations = maps:put(Id, Translation#translation{media = Media}, Translations)}}
+  end;
 
-handle_cast({stream_stopped,Media},State) ->
-  case ets:match_object(?T_STREAMS, #translation{media_id=Media,_='_'}) of
-    [#translation{name=Name}=Rec] -> 
-      lager:info([{kind,access}],"STOP_STREAM ~s~n", [Name]),
-      ets:insert(?T_STREAMS, Rec#translation{media_id = undefined, live = false});
-    _ -> ?D({unregistered_stream, Media})
-  end,
-  {noreply,State};
+handle_cast({stream_stopped, Name}, #state{translations = Translations, name_to_id = NameToId} = State) ->
+  case maps:get(Name, NameToId, undefined) of
+    undefined ->
+      {noreply, State};
+    Id ->
+      lager:info([{kind,access}],"STOP_STREAM ~p~n", [Id]),
+      Translation = maps:get(Id, Translations),
+      {noreply, State#state{translations = maps:put(Id, Translation#translation{media = undefined}, Translations)}}
+  end;
+
+handle_cast({user_disconnected, SessionId}, #state{translations = Translations, sid_to_id = SidToId} = State) ->
+  case maps:get(SessionId, SidToId, undefined) of
+    undefined ->
+      {noreply, State};
+    Id ->
+      ?D({user_disconnected, SessionId}),
+      Translation = maps:get(Id, Translations),
+      {noreply, State#state{translations = maps:put(Id, Translation#translation{session_id = undefined, session_pid = undefined, media = undefined}, Translations), sid_to_id = maps:remove(SessionId, SidToId)}}
+  end;
 
 handle_cast(Cast, State) ->
   {error, {unknown_cast, Cast}, State}.
-
-handle_info({add_to_dets, _Rec},#state{use_dets = false}=State) ->
-  {noreply, State};
-
-handle_info({add_to_dets, Rec},#state{use_dets = true}=State) ->
-  dets:insert(?D_TRANSLATIONS, Rec),
-  {noreply, State};
-
-handle_info({remove_from_dets, _Name},#state{use_dets = false}=State) ->
-  {noreply, State};
-
-handle_info({remove_from_dets, Name},#state{use_dets = true}=State) ->
-  dets:delete(?D_TRANSLATIONS, Name),
-  {noreply, State};
-
 
 handle_info(stop, State) ->
   {stop, normal, State};
@@ -231,58 +182,21 @@ handle_info(Info, State) ->
   ?D({unknown_info, Info}),
   {noreply, State}.
 
-terminate(Reason, #state{use_dets = true}) ->
-  dets:close(ulitos:get_var(dpo,dets_file,"./dets")),
-  ?D({{server_terminates, Reason, close_dets}}),
-  ok;
+terminate(_Reason, _State) ->
+  ok.
 
-terminate(_, _) -> ok.
 code_change(_, State, _) -> {ok, State}.
 
 
 
 %%% --------------- private ----------------- %%%
 
--spec play_url(string()|binary()) -> binary().
-
-play_url(Name) ->
-  list_to_binary(io_lib:format("~s/hls/~s.m3u8",[ulitos:get_var(dpo, varnish_host),Name])).
-
-find_(Name) ->
-  case ets:lookup(?T_STREAMS, Name) of
-    [#translation{}=Rec] -> {ok, Rec};
-    [] -> undefined
-  end. 
-
-close_(Name) ->
-  case find_(Name) of
-    {ok,#translation{session_pid=Pid, live = true}} -> 
-      lager:info([{kind,access}],"CLOSE_STREAM ~s~n", [Name]),
-      (catch rtmp_session:reject_connection(Pid)),
-     ok;
-    {ok, _} -> ?D({stream_is_not_active, Name}),
-        ok;
-    Else -> ?D({stream_not_registered,Name,Else}),
-        {error, not_found}
-  end.
-
-finish_(Name) ->
-  case close_(Name) of
-    ok -> 
-      lager:info([{kind,access}],"FINISH_STREAM ~s~n", [Name]),
-      ets:delete(?T_STREAMS,Name),
-      self() ! {remove_from_dets, Name},
-      ok;
-    {error, not_active} -> 
-      lager:info([{kind,access}],"FINISH_STREAM ~s~n", [Name]),
-      ets:delete(?T_STREAMS,Name),
-      self() ! {remove_from_dets, Name},
-      ok;
-    Else -> 
-      ?D({finish_failed,Name}),
-      Else
-  end.
-
+init_http() ->
+  Routes = [
+    {"/api/dpo/translations/[:id]", [{id, int}], translations_handler, []},
+    {"/hls/dpo/:id/:filename", [{id, int}], dpo_hls_handler, []}
+  ],
+  ems_http:add_routes(Routes).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -308,7 +222,7 @@ cleanup_(_) ->
   meck:unload(rtmp_session),
   meck:unload(hls_media),
   application:stop(lager),
-  file:delete(ulitos:get_var(dpo,dets_file,"./dets")),
+  file:delete(ulitos_app:get_var(dpo,dets_file,"./dets")),
   dpo:stop().
 
 add_stream_test_() ->

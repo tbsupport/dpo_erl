@@ -6,10 +6,7 @@
 -record(translation, {
   id :: non_neg_integer(),
   session_id :: non_neg_integer(),
-  socket :: pid(),
-  session_pid ::pid(),
-  media_id :: pid(),
-  name :: binary(),
-  play_url ::string(),
-  live = false ::boolean()
+  session_pid :: pid(),
+  media :: pid(),
+  filename :: iolist()
 }).

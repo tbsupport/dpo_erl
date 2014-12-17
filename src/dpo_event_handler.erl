@@ -42,13 +42,13 @@ init([]) ->
 
 
 
-handle_event(#erlyvideo_event{event = user_connected}, State) ->
+handle_event(#erlyvideo_event{event = user_connected, session_id = _SessionId}, State) ->
   %% do nothing for now
   {ok, State};
 
 
-handle_event(#erlyvideo_event{event = user_disconnected, session_id = _SessionId} = _E, State) ->
-  %% do nothing for now
+handle_event(#erlyvideo_event{event = user_disconnected, session_id = SessionId} = _E, State) ->
+  dpo_server:user_disconnected(SessionId),
   {ok, State};
 
 
@@ -58,12 +58,12 @@ handle_event(#erlyvideo_event{event = stream_created, options = _Opts, stream = 
 
 
 handle_event(#erlyvideo_event{event = stream_started, stream = Media, stream_name = Name}, State) ->
-  dpo_server:stream_started(Media,Name),
+  dpo_server:stream_started(Name, Media),
   {ok, State};
 
 
-handle_event(#erlyvideo_event{event = stream_stopped, stream = Media}, State) ->
-  dpo_server:stream_stopped(Media),
+handle_event(#erlyvideo_event{event = stream_stopped, stream_name = Name}, State) ->
+  dpo_server:stream_stopped(Name),
   {ok, State};
 
 

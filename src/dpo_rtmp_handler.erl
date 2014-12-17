@@ -7,46 +7,52 @@
 -include_lib("../include/rtmp.hrl").
 -include_lib("../include/rtmp_session.hrl").
 
--export([publish/2,connect/2]).
+-export([publish/2, connect/2]).
 
-publish(#rtmp_session{host = <<"dpo">>=Host} = Session, #rtmp_funcall{args = [null, OrigName |_]} = AMF) ->
-  Name = extract_name(OrigName),
-  case dpo_server:authorize_publish(Name,Session,self()) of
-    ok -> 
-      lager:info([{kind,access}],"STREAM_PUBLISH ~p ~p~n",[Host,Name]),
-      apps_recording:publish(Session, AMF#rtmp_funcall{args = [null,  Name, <<"append">>]});
-    {error,_} ->
-      reject_publish(Session,AMF)
-  end;
-
-publish(#rtmp_session{host = <<"hls">>=Host} = Session, #rtmp_funcall{args = [null, OrigName|_]} = AMF) ->
-  Name = extract_name(OrigName),
-  case dpo_server:authorize_publish(Name,Session,self()) of
-    ok -> 
-      lager:info([{kind,access}],"STREAM_PUBLISH ~p ~p~n",[Host,Name]),
-      apps_recording:publish(Session, AMF#rtmp_funcall{args = [null,  Name]});
-    {error,_} ->
-      reject_publish(Session,AMF)
-  end;
-
-publish(Session, AMF) ->
-  reject_publish(Session,AMF).
-
-connect(#rtmp_session{host = <<"dpo">>}, _AMF) ->
+publish(_State, #rtmp_funcall{args = [null, null]}) ->
   unhandled;
 
-connect(#rtmp_session{host = <<"hls">>}, _AMF) ->
-  unhandled;
+publish(#rtmp_session{host = <<"dpo/", _Hash/binary>> = Host, session_id = SessionId} = Session, #rtmp_funcall{args = [null, _OrigName |_]} = AMF) ->
+  lager:info([{kind,access}],"STREAM_PUBLISH ~p~n",[Host]),
+  Filename = dpo_server:publish(SessionId),
+  apps_recording:publish(Session, AMF#rtmp_funcall{args = [null, Filename, <<"append">>]});
 
-connect(#rtmp_session{host = _Host}=Session, _AMF) ->
-  rtmp_session:reject_connection(Session).
+publish(#rtmp_session{host = <<"hls/", _Hash/binary>>=Host} = Session, #rtmp_funcall{args = [null, OrigName|_]} = AMF) ->
+  Name = extract_name(OrigName),
+  lager:info([{kind,access}],"STREAM_PUBLISH ~p~n", [Host]),
+  apps_recording:publish(Session, AMF#rtmp_funcall{args = [null,  Name]});
 
+publish(_Session, _AMF) ->
+  unhandled.
+
+connect(#rtmp_session{host = <<"dpo/", Hash/binary>> = Host, session_id = SessionId} = Session, _AMF) ->
+  case dpo_api:check_auth_hash(extract_name(Hash)) of
+    {ok, Id} ->
+      dpo_server:add(Id, SessionId, self()),
+      lager:info([{kind,access}],"CONNECT ~p ~p~n", [Host, SessionId]),
+      rtmp_session:accept_connection(Session);
+    Other	->
+      ?D({check_hash_failed, Other}),
+      lager:info([{kind,access}],"LOGIN_REJECT wrong_hash ~p~n",[Hash]),
+      unhandled
+  end;
+
+connect(#rtmp_session{host = <<"hls/", Hash/binary>> = Host, session_id = SessionId} = Session, _AMF) ->
+  case dpo_api:check_auth_hash(extract_name(Hash)) of
+    {ok, Id} ->
+      dpo_server:add(Id, SessionId, self()),
+      lager:info([{kind,access}],"CONNECT ~p ~p~n", [Host, SessionId]),
+      rtmp_session:accept_connection(Session);
+    Other	->
+      ?D({check_hash_failed, Other}),
+      lager:info([{kind,access}],"LOGIN_REJECT wrong_hash ~p~n",[Hash]),
+      unhandled
+  end;
+
+connect(_Session, _AMF) ->
+  unhandled.
 
 %%--------- private -----------%%
-
-reject_publish(#rtmp_session{host = Host} = Session,#rtmp_funcall{args = [null, Name|_]}) ->
-  lager:info([{kind,access}],"STREAM_REJECT ~p ~p~n",[Host,Name]),
-  rtmp_session:reject_connection(Session).
 
 %% @doc Remove query params from stream name
 %% @end
@@ -77,7 +83,7 @@ cleanup_(_) ->
   meck:unload(apps_recording),
   meck:unload(rtmp_session),
   application:stop(lager),
-  file:delete(ulitos:get_var(dpo,dets_file,"./dets")),
+  file:delete(ulitos_app:get_var(dpo,dets_file,"./dets")),
   dpo:stop().
 
 extract_name_test() ->

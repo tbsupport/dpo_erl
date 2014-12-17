@@ -7,7 +7,7 @@
 
 start(_Type, _Args) ->
     lager:info("Starting application: DPO translations"),
-    ulitos:load_config(dpo,"dpo.conf"),
+    ulitos_app:load_config(dpo,"dpo.conf"),
     dpo_sup:start_link().
   
 

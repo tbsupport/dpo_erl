@@ -3,7 +3,7 @@
  {vsn, git},
  {modules, []},
  {registered, [dpo_server]},
- {applications, [kernel, stdlib, lager]},
+ {applications, [kernel, stdlib, lager, erlyvideo]},
  {mod, {dpo_app, []}}
 ]}.
 

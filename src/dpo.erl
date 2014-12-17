@@ -3,7 +3,7 @@
 -export([start/0, stop/0, upgrade/0, ping/0, reload_config/0, health_check/0]).
 
 start() ->
-    application:start(dpo).
+    ulitos_app:ensure_started(dpo).
   
 stop() -> 
     application:stop(dpo),
@@ -13,7 +13,7 @@ upgrade() ->
 	ems:reload(dpo).
 
 reload_config() ->
-  ulitos:load_config(dpo,"dpo.conf"),
+  ulitos_app:load_config(dpo,"dpo.conf"),
   dpo_server:config_reloaded().
 
 
