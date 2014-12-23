@@ -205,24 +205,15 @@ init_http() ->
 
 -define(TPID,list_to_pid("<0.12.13>")).
 
-play_url_test() ->
-  application:set_env(dpo, varnish_host, "http://var1.ru"), 
-  ?assertEqual(<<"http://var1.ru/hls/path/name.m3u8">>,play_url("path/name")),
-  ?assertEqual(<<"http://var1.ru/hls/path/name.m3u8">>,play_url(<<"path/name">>)).
-
 setup_() ->
   meck:new(rtmp_session,[non_strict]),
   meck:expect(rtmp_session, reject_connection, fun(_X) -> dpo_server:stream_stopped(?TPID) end),
-  meck:new(hls_media,[non_strict]),
-  meck:expect(hls_media, write_vod_hls, fun(_,_,_,_) -> ok end),
   lager:start(),
   dpo:start().
 
 cleanup_(_) ->
   meck:unload(rtmp_session),
-  meck:unload(hls_media),
   application:stop(lager),
-  file:delete(ulitos_app:get_var(dpo,dets_file,"./dets")),
   dpo:stop().
 
 add_stream_test_() ->
@@ -239,78 +230,41 @@ add_stream_test_() ->
 
 add_stream_t_(_) ->
   [
-    ?_assertEqual({ok,play_url("test")}, dpo_server:add("test"))
+    ?_assertEqual(ok, dpo_server:add(1, 2, 3))
   ].
 
 add_stream_params_t_(_) ->
-  {ok,_} = dpo_server:add("test"),
-  {ok,#translation{play_url=Url, id = Count}} = dpo_server:find("test"),
+  dpo_server:add(1, 1, 1),
+  {ok,#translation{session_id = Sid, session_pid = Pid}} = dpo_server:find("test"),
   [
-    ?_assertEqual(play_url("test"),Url),
-    ?_assertEqual(1,Count)
+    ?_assertEqual(1, Sid),
+    ?_assertEqual(1, Pid)
   ].
 
 add_dup_stream_t_(_) ->
-  {ok,_} = dpo_server:add("test"),
+  dpo_server:add(1, 1, 1),
   [
-    ?_assertEqual({error, already_exist}, dpo_server:add("test"))
+    ?_assertEqual({error, already_exist}, dpo_server:add(1, 1, 1))
   ].
 
 list_streams_t_(_) ->
-  {ok,_} = dpo_server:add("test"),
-  {ok,_} = dpo_server:add("test2"),
+  dpo_server:add(1, 1, 1),
+  dpo_server:add(2, 2, 2),
   [
     ?_assertEqual(2, length(dpo_server:list()))
   ].
 
 finish_stream_test_() ->
   [
-    {"Close existing stream",
-      ?setup(fun close_stream_t_/1)},
-    {"Close unexisting stream",
-      ?setup(fun close_unex_stream_t_/1)},
     {"Finish stream",
-      ?setup(fun finish_stream_t_/1)},
-    {"Finish record stream",
-      ?setup(fun finish_record_stream_t_/1)}
-  ].
-
-close_stream_t_(_) ->
-  {ok,_} = dpo_server:add("test"),
-  Res = dpo_server:close("test"),
-  Size = length(dpo_server:list()),
-  [
-    ?_assertEqual(ok, Res)
-    ,?_assertEqual(1, Size)
-  ].
-
-close_unex_stream_t_(_) ->
-  {ok,_} = dpo_server:add("test"),
-  [
-    ?_assertEqual({error, not_found}, dpo_server:close("test2"))
-    ,?_assertEqual(1, length(dpo_server:list()))
+      ?setup(fun finish_stream_t_/1)}
   ].
 
 finish_stream_t_(_) ->
-  {ok,_} = dpo_server:add("test"),
+  dpo_server:add(1, 1, 1),
   [
-    ?_assertEqual(ok, dpo_server:finish("test"))
+    ?_assertEqual(ok, dpo_server:finish(1))
     ,?_assertEqual(0, length(dpo_server:list()))
-  ].
-
-finish_record_stream_t_(_) ->
-  {ok,_} = dpo_server:add("t"),
-  FileDir = code:priv_dir(dpo)++"/tmp",
-  filelib:ensure_dir(FileDir++"/t"),
-  application:set_env(dpo, file_dir, FileDir),
-  Res = file:write_file(FileDir++"/t.flv",[]),
-  application:set_env(dpo, aws_bucket, "b"),
-  application:set_env(dpo, aws_dir, "h"), 
-  dpo_saver:reload(),
-  [
-    ?_assertEqual(ok,Res),
-    ?_assert(filelib:is_regular(FileDir++"/t.flv")),
-    ?_assertEqual({ok, <<"http://b.s3.amazonaws.com/h/t/playlist.m3u8">>},dpo_server:finish("t"))
   ].
 
 live_stream_test_() ->
@@ -326,86 +280,33 @@ live_stream_test_() ->
   ].
 
 add_live_stream_t_(_) ->
-  {ok,_} = dpo_server:add("test"),
-  dpo_server:stream_started(?TPID,<<"test">>),
-  {ok,#translation{live=State}} = dpo_server:find("test"),
+  dpo_server:add(1, 2, 3),
+  Name = dpo_server:publish(2),
+  dpo_server:stream_started(Name, ?TPID),
+  {ok,#translation{media = Media}} = dpo_server:find(1),
   [
-    ?_assert(State)
+    ?_assertEqual(?TPID, Media)
   ].
 
 stop_live_stream_t_(_) ->
-  {ok,_} = dpo_server:add("test"),
-  dpo_server:stream_started(?TPID,<<"test">>),
-  {ok, #translation{live=Was}} = dpo_server:find("test"),
-  dpo_server:stream_stopped(?TPID),
-  {ok,#translation{live=State}} = dpo_server:find("test"),
+  dpo_server:add(1, 2, 3),
+  Name = dpo_server:publish(2),
+  dpo_server:stream_started(Name, ?TPID),
+  {ok,#translation{media = Media1}} = dpo_server:find(1),
+  dpo_server:stream_stopped(Name),
+  {ok,#translation{media = Media2}} = dpo_server:find(1),
   [
-    ?_assert(Was),
-    ?_assertNot(State)
-  ].
-
-close_live_stream_t_(_) ->
-  {ok,_} = dpo_server:add("test"),
-  dpo_server:stream_started(?TPID,<<"test">>),
-  ok = dpo_server:close("test"),
-  {ok,#translation{live=State}} = dpo_server:find("test"),
-  [
-   ?_assertNot(State)
+    ?_assertEqual(?TPID, Media1),
+    ?_assertEqual(undefined, Media2)
   ].
 
 finish_live_stream_t_(_) ->
-  {ok,_} = dpo_server:add("test"),
-  dpo_server:stream_started(?TPID,<<"test">>),
-  ok = dpo_server:finish("test"),
+  dpo_server:add(1, 2, 3),
+  Name = dpo_server:publish(2),
+  dpo_server:stream_started(Name, ?TPID),
+  dpo_server:finish(1),
   [
-    ?_assertEqual(undefined,dpo_server:find("test"))
+    ?_assertEqual(undefined, dpo_server:find(1))
   ].
-
-authorization_test_() ->
-  [
-    {"Authorize succes",
-      ?setup(fun auth_stream_t_/1)},
-    {"Authorize reject unregistered",
-      ?setup(fun auth_fail_t_/1)},
-    {"Authorize reject started",
-      ?setup(fun auth_fail_started_t_/1)}
-  ].
-
-auth_stream_t_(_) ->
-  {ok,_} = dpo_server:add("test"),
-  {ok,_} = dpo_server:add("path/to/test"),
-  [
-    ?_assertEqual(ok, dpo_server:authorize_publish("test",#rtmp_session{session_id=1},?TPID))
-    ,?_assertEqual(ok, dpo_server:authorize_publish("path/to/test",#rtmp_session{session_id=2},?TPID))
-  ].
-
-auth_fail_t_(_) ->
-  [
-    ?_assertEqual({error,not_found}, dpo_server:authorize_publish("test",#rtmp_session{session_id=1},?TPID))
-  ].
-
-auth_fail_started_t_(_) ->
-  {ok,_} = dpo_server:add("test"),
-  dpo_server:stream_started(?TPID,<<"test">>),
-  [
-    ?_assertEqual({error,already_started}, dpo_server:authorize_publish("test",#rtmp_session{session_id=1},?TPID))
-  ].
-
-
-dets_test_() ->
-  [
-    {"Load from dets on normal app start",
-      ?setup(fun load_dets_appstart_t_/1)
-    }
-  ].
-
-load_dets_appstart_t_(_) ->
-  dpo_server:add("test"),
-  dpo:stop(),
-  dpo:start(),
-  [
-    ?_assertEqual(1, length(dpo_server:list()))
-  ].
-
 
 -endif.
