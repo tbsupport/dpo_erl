@@ -37,7 +37,7 @@ get_worker(Id) ->
       case dpo_server:find(Id) of
         undefined ->
           undefined;
-        #translation{media = undfined} ->
+        #translation{media = undefined} ->
           undefined;
         #translation{media = Media} ->
           hls_server:add_stream({dpo, Id}, Media)

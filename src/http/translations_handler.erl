@@ -47,7 +47,7 @@ is_authorized(Req, State) ->
   {Reply, Req, State}.
 
 content_types_provided(Req, State) ->
-  {[{{<<"text">>, <<"html">>, '*'}, translation_status}],Req,State}.
+  {[{{<<"text">>, <<"html">>, '*'}, translation_status}], Req, State}.
 
 resource_exists(Req, #state{id = undefined} = State) ->
   {true, Req, State};
@@ -57,7 +57,7 @@ resource_exists(Req, #state{id = Id} = State) ->
     undefined ->
       {false, Req, State};
     Translation ->
-      {true, Req, #state{translation = Translation} = State}
+      {true, Req, State#state{translation = Translation}}
   end.
 
 
