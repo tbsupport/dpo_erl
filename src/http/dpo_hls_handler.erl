@@ -40,7 +40,7 @@ get_worker(Id) ->
         #translation{media = undefined} ->
           undefined;
         #translation{media = Media} ->
-          hls_server:add_stream({dpo, Id}, Media)
+          hls_server:add_stream({dpo, Id}, Media, #{duration => ulitos_app:get_var(dpo, hls_duration, 5000)})
       end;
     {ok, Pid} ->
       {ok, Pid}
