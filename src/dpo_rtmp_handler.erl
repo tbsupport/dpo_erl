@@ -12,6 +12,7 @@
 publish(_State, #rtmp_funcall{args = [null, null]}) ->
   unhandled;
 
+<<<<<<< HEAD
 publish(#rtmp_session{path = <<"dpo/", _Hash/binary>> = Path, session_id = SessionId} = Session, #rtmp_funcall{args = [null, _OrigName |_]} = AMF) ->
   lager:info([{kind,access}],"STREAM_PUBLISH ~p~n",[Path]),
   Filename = dpo_server:publish(SessionId),
