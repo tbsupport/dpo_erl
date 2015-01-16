@@ -12,16 +12,15 @@
 publish(_State, #rtmp_funcall{args = [null, null]}) ->
   unhandled;
 
-<<<<<<< HEAD
-publish(#rtmp_session{path = <<"dpo/", _Hash/binary>> = Path, session_id = SessionId} = Session, #rtmp_funcall{args = [null, _OrigName |_]} = AMF) ->
-  lager:info([{kind,access}],"STREAM_PUBLISH ~p~n",[Path]),
+publish(#rtmp_session{path = <<"dpo/", _Hash/binary>> = Host, session_id = SessionId} = Session, #rtmp_funcall{args = [null, _OrigName |_]} = AMF) ->
+  lager:info([{kind,access}],"STREAM_PUBLISH ~p ~s~n",[Host, record]),
   Filename = dpo_server:publish(SessionId),
   apps_recording:publish(Session, AMF#rtmp_funcall{args = [null, Filename, <<"append">>]});
 
-publish(#rtmp_session{path = <<"hls/", _Hash/binary>> = Path} = Session, #rtmp_funcall{args = [null, OrigName|_]} = AMF) ->
-  Name = extract_name(OrigName),
-  lager:info([{kind,access}],"STREAM_PUBLISH ~p~n", [Path]),
-  apps_recording:publish(Session, AMF#rtmp_funcall{args = [null,  Name]});
+publish(#rtmp_session{path = <<"hls/", _Hash/binary>>=Host, session_id = SessionId} = Session, #rtmp_funcall{args = [null, _OrigName|_]} = AMF) ->
+  lager:info([{kind,access}],"STREAM_PUBLISH ~p ~s~n", [Host, live]),
+  Filename = dpo_server:publish(SessionId),
+  apps_recording:publish(Session, AMF#rtmp_funcall{args = [null,  Filename]});
 
 publish(_Session, _AMF) ->
   unhandled.
