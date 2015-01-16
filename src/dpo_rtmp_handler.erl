@@ -4,32 +4,32 @@
 
 -module(dpo_rtmp_handler).
 -include_lib("dpo.hrl").
--include_lib("../include/rtmp.hrl").
--include_lib("../include/rtmp_session.hrl").
+-include_lib("rtmp/include/rtmp.hrl").
+-include_lib("rtmp/src/rtmp_session.hrl").
 
 -export([publish/2, connect/2]).
 
 publish(_State, #rtmp_funcall{args = [null, null]}) ->
   unhandled;
 
-publish(#rtmp_session{host = <<"dpo/", _Hash/binary>> = Host, session_id = SessionId} = Session, #rtmp_funcall{args = [null, _OrigName |_]} = AMF) ->
-  lager:info([{kind,access}],"STREAM_PUBLISH ~p~n",[Host]),
+publish(#rtmp_session{path = <<"dpo/", _Hash/binary>> = Path, session_id = SessionId} = Session, #rtmp_funcall{args = [null, _OrigName |_]} = AMF) ->
+  lager:info([{kind,access}],"STREAM_PUBLISH ~p~n",[Path]),
   Filename = dpo_server:publish(SessionId),
   apps_recording:publish(Session, AMF#rtmp_funcall{args = [null, Filename, <<"append">>]});
 
-publish(#rtmp_session{host = <<"hls/", _Hash/binary>>=Host} = Session, #rtmp_funcall{args = [null, OrigName|_]} = AMF) ->
+publish(#rtmp_session{path = <<"hls/", _Hash/binary>> = Path} = Session, #rtmp_funcall{args = [null, OrigName|_]} = AMF) ->
   Name = extract_name(OrigName),
-  lager:info([{kind,access}],"STREAM_PUBLISH ~p~n", [Host]),
+  lager:info([{kind,access}],"STREAM_PUBLISH ~p~n", [Path]),
   apps_recording:publish(Session, AMF#rtmp_funcall{args = [null,  Name]});
 
 publish(_Session, _AMF) ->
   unhandled.
 
-connect(#rtmp_session{host = <<"dpo/", Hash/binary>> = Host, session_id = SessionId} = Session, _AMF) ->
+connect(#rtmp_session{path = <<"dpo/", Hash/binary>> = Path, session_id = SessionId} = Session, _AMF) ->
   case dpo_api:check_auth_hash(extract_name(Hash)) of
     {ok, Id} ->
       dpo_server:add(Id, SessionId, self()),
-      lager:info([{kind,access}],"CONNECT ~p ~p~n", [Host, SessionId]),
+      lager:info([{kind,access}],"CONNECT ~p ~p~n", [Path, SessionId]),
       rtmp_session:accept_connection(Session);
     Other	->
       ?D({check_hash_failed, Other}),
@@ -37,11 +37,11 @@ connect(#rtmp_session{host = <<"dpo/", Hash/binary>> = Host, session_id = Sessio
       unhandled
   end;
 
-connect(#rtmp_session{host = <<"hls/", Hash/binary>> = Host, session_id = SessionId} = Session, _AMF) ->
+connect(#rtmp_session{path = <<"hls/", Hash/binary>> = Path, session_id = SessionId} = Session, _AMF) ->
   case dpo_api:check_auth_hash(extract_name(Hash)) of
     {ok, Id} ->
       dpo_server:add(Id, SessionId, self()),
-      lager:info([{kind,access}],"CONNECT ~p ~p~n", [Host, SessionId]),
+      lager:info([{kind,access}],"CONNECT ~p ~p~n", [Path, SessionId]),
       rtmp_session:accept_connection(Session);
     Other	->
       ?D({check_hash_failed, Other}),
@@ -118,47 +118,47 @@ connect_test_() ->
 publish_dpo_t_(_) ->
   dpo_server:add(<<"test/path/name">>),
   [
-    ?_assertEqual([<<"test/path/name">>,<<"append">>],publish(#rtmp_session{host= <<"dpo">>},#rtmp_funcall{args=[null,<<"test/path/name">>]}))
+    ?_assertEqual([<<"test/path/name">>,<<"append">>],publish(#rtmp_session{path= <<"dpo">>},#rtmp_funcall{args=[null,<<"test/path/name">>]}))
     ,?_assert(meck:validate(apps_recording))
   ].
 
 publish_hls_t_(_) ->
   dpo_server:add(<<"test/path/name">>),
   [
-    ?_assertEqual([<<"test/path/name">>],publish(#rtmp_session{host= <<"hls">>},#rtmp_funcall{args=[null,<<"test/path/name">>]}))
+    ?_assertEqual([<<"test/path/name">>],publish(#rtmp_session{path= <<"hls">>},#rtmp_funcall{args=[null,<<"test/path/name">>]}))
     ,?_assert(meck:validate(apps_recording))
   ].
 
 publish_dpo_unregistered_t_(_) ->
   [
-    ?_assertEqual(rejected,publish(#rtmp_session{host= <<"dpo">>},#rtmp_funcall{args=[null,<<"test/path/name">>]}))
+    ?_assertEqual(rejected,publish(#rtmp_session{path= <<"dpo">>},#rtmp_funcall{args=[null,<<"test/path/name">>]}))
     ,?_assert(meck:validate(rtmp_session))
   ].
 
 publish_hls_unregistered_t_(_) ->
   [
-    ?_assertEqual(rejected,publish(#rtmp_session{host= <<"hls">>},#rtmp_funcall{args=[null,<<"test/path/name">>]}))
+    ?_assertEqual(rejected,publish(#rtmp_session{path= <<"hls">>},#rtmp_funcall{args=[null,<<"test/path/name">>]}))
     ,?_assert(meck:validate(rtmp_session))
   ].
 
 publish_registered_t_(_) ->
   dpo_server:add(<<"test/path/name">>),
   [
-    ?_assertEqual(rejected,publish(#rtmp_session{host= <<"testo">>},#rtmp_funcall{args=[null,<<"test/path/name">>]}))
+    ?_assertEqual(rejected,publish(#rtmp_session{path= <<"testo">>},#rtmp_funcall{args=[null,<<"test/path/name">>]}))
     ,?_assert(meck:validate(rtmp_session))
   ].
 
 publish_unregistered_t_(_) ->
   [
-    ?_assertEqual(rejected,publish(#rtmp_session{host= <<"testo">>},#rtmp_funcall{args=[null,<<"test/path/name">>]}))
+    ?_assertEqual(rejected,publish(#rtmp_session{path= <<"testo">>},#rtmp_funcall{args=[null,<<"test/path/name">>]}))
     ,?_assert(meck:validate(rtmp_session))
   ].
 
 connect_normal_t_(_) ->
-  ?_assertEqual(unhandled, connect(#rtmp_session{host= <<"dpo">>},#rtmp_funcall{})).
+  ?_assertEqual(unhandled, connect(#rtmp_session{path= <<"dpo">>},#rtmp_funcall{})).
 
 connect_unknown_t_(_) ->
-  ?_assertEqual(rejected, connect(#rtmp_session{host= <<"testo">>},#rtmp_funcall{})).
+  ?_assertEqual(rejected, connect(#rtmp_session{path= <<"testo">>},#rtmp_funcall{})).
 
 
 -endif.
