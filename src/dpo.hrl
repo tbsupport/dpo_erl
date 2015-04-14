@@ -8,5 +8,6 @@
   session_id :: non_neg_integer(),
   session_pid :: pid(),
   media :: pid(),
-  filename :: iolist()
+  filename :: iolist(),
+  hls :: reference()
 }).

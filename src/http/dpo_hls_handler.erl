@@ -11,7 +11,7 @@ init(Req, Opts) ->
   Id = cowboy_req:binding(id, Req),
   {Type, File} = validate_file(cowboy_req:binding(filename, Req)),
   Reply =
-    case get_worker(Id) of
+    case dpo_server:get_hls_stream(Id) of
       undefined ->
         cowboy_req:reply(404, Req);
       {ok, Worker} ->
@@ -29,21 +29,6 @@ validate_file(BFile) ->
   case type(lists:reverse(File)) of
     invalid -> invalid;
     Type -> {Type, File}
-  end.
-
-get_worker(Id) ->
-  case hls_server:get_stream({dpo, Id}) of
-    undefined ->
-      case dpo_server:find(Id) of
-        undefined ->
-          undefined;
-        #translation{media = undefined} ->
-          undefined;
-        #translation{media = Media} ->
-          hls_server:add_stream({dpo, Id}, Media, #{duration => ulitos_app:get_var(dpo, hls_duration, 5000)})
-      end;
-    {ok, Pid} ->
-      {ok, Pid}
   end.
 
 type([$s, $t, $. | _ ]) -> segment;

@@ -13,7 +13,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -export([add/3, finish/1, find/1, list/0, publish/1, config_reloaded/0]).
--export([stream_started/2, stream_stopped/1, user_disconnected/1]).
+-export([stream_started/2, stream_stopped/1, user_disconnected/1, get_hls_stream/1]).
 -export([status/0]).
 
 -define(T_STREAMS, dpo_streams).
@@ -98,6 +98,13 @@ stream_stopped(Name) ->
 user_disconnected(SessionId) ->
   gen_server:cast(?MODULE,{user_disconnected, SessionId}).
 
+%% @doc Get hls stream by id
+%% @end
+
+-spec get_hls_stream(non_neg_integer()) -> {ok, pid()}.
+
+get_hls_stream(Id) ->
+  gen_server:call(?MODULE, {get_hls_stream, Id}).
 
 %%%----------- gen_server handlers ------------%%%
 
@@ -138,6 +145,25 @@ handle_call({publish, SessionId}, _, #state{translations = Translations, sid_to_
 
 handle_call({list}, _ , #state{translations = Translations} = State) ->
   {reply, maps:values(Translations), State};
+
+handle_call({get_hls_stream, Id}, _From, #state{translations = Translations} = State) ->
+  case maps:get(Id, Translations, undefined) of
+    undefined ->
+      {reply, undefined, State};
+    #translation{media = undefined, hls = undefined} ->
+      {reply, undefined, State};
+    #translation{media = Media, hls = undefined} = Translation->
+      {ok, Hls} = hls_server:add_stream(Media),
+      {reply, hls_server:get_stream(Hls), State#state{translations = maps:put(Id, Translation#translation{hls = Hls}, Translations)}};
+    #translation{media = Media, hls = Hls} = Translation ->
+      case hls_server:get_stream(Hls) of
+        undefined ->
+          {ok, NewHls} = hls_server:add_stream(Media),
+          {reply, hls_server:get_stream(NewHls), State#state{translations = maps:put(Id, Translation#translation{hls = NewHls}, Translations)}};
+        {ok, Pid} ->
+          {reply, {ok, Pid}, State}
+      end
+  end;
 
 handle_call(Req, _, State) ->
   {error, {unhandled, Req}, State}.
