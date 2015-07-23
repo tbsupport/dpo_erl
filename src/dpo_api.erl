@@ -6,7 +6,7 @@
 -export([check_auth_hash/1, recording_task/2]).
 
 check_auth_hash(Hash) ->
-  case api_client:post(http_auth_path, [{"token", Hash}]) of
+  case api_client:post(http_dpo_auth_path, [{"token", Hash}]) of
     {ok, Json} ->
       Id = proplists:get_value(<<"id">>, Json),
       {ok, Id};
