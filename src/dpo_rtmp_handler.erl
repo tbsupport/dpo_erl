@@ -3,7 +3,7 @@
 %%% @end
 
 -module(dpo_rtmp_handler).
--include_lib("dpo.hrl").
+-include_lib("erlyvideo/include/log.hrl").
 -include_lib("rtmp/include/rtmp.hrl").
 -include_lib("rtmp/src/rtmp_session.hrl").
 
@@ -12,14 +12,16 @@
 publish(_State, #rtmp_funcall{args = [null, null]}) ->
   unhandled;
 
-publish(#rtmp_session{path = <<"dpo/", _Hash/binary>> = Host, session_id = SessionId} = Session, #rtmp_funcall{args = [null, _OrigName |_]} = AMF) ->
-  lager:info([{kind,access}],"STREAM_PUBLISH ~p ~s~n",[Host, record]),
-  Filename = dpo_server:publish(SessionId),
+publish(#rtmp_session{path = <<"dpo/", _Hash/binary>> = Host, session_id = SessionId} = Session, #rtmp_funcall{args = [null, OrigName |_]} = AMF) ->
+  ?ACCESS("STREAM_PUBLISH ~p ~s", [Host, record]),
+  {Name, QS} = extract_name_with_qs(OrigName),
+  Filename = dpo_server:publish(SessionId, Name, QS),
   apps_recording:publish(Session, AMF#rtmp_funcall{args = [null, Filename, <<"append">>]});
 
-publish(#rtmp_session{path = <<"hls/", _Hash/binary>>=Host, session_id = SessionId} = Session, #rtmp_funcall{args = [null, _OrigName|_]} = AMF) ->
-  lager:info([{kind,access}],"STREAM_PUBLISH ~p ~s~n", [Host, live]),
-  Filename = dpo_server:publish(SessionId),
+publish(#rtmp_session{path = <<"hls/", _Hash/binary>> = Host, session_id = SessionId} = Session, #rtmp_funcall{args = [null, OrigName |_]} = AMF) ->
+  ?ACCESS("STREAM_PUBLISH ~p ~s~n", [Host, live]),
+  {Name, QS} = extract_name_with_qs(OrigName),
+  Filename = dpo_server:publish(SessionId, Name, QS),
   apps_recording:publish(Session, AMF#rtmp_funcall{args = [null,  Filename]});
 
 publish(_Session, _AMF) ->
@@ -28,24 +30,31 @@ publish(_Session, _AMF) ->
 connect(#rtmp_session{path = <<"dpo/", Hash/binary>> = Path, session_id = SessionId} = Session, _AMF) ->
   case dpo_api:check_auth_hash(extract_name(Hash)) of
     {ok, Id} ->
-      dpo_server:add(Id, SessionId, self()),
-      lager:info([{kind,access}],"CONNECT ~p ~p~n", [Path, SessionId]),
-      rtmp_session:accept_connection(Session);
+      case dpo_server:add(Id, SessionId, self()) of
+        {error, _} ->
+          unhandled;
+        ok ->
+          ?ACCESS("CONNECT ~p ~p", [Path, SessionId]),
+          rtmp_session:accept_connection(Session)
+      end;
     Other	->
       ?D({check_hash_failed, Other}),
-      lager:info([{kind,access}],"LOGIN_REJECT wrong_hash ~p~n",[Hash]),
+      ?ACCESS("LOGIN_REJECT wrong_hash ~p", [Hash]),
       unhandled
   end;
 
 connect(#rtmp_session{path = <<"hls/", Hash/binary>> = Path, session_id = SessionId} = Session, _AMF) ->
   case dpo_api:check_auth_hash(extract_name(Hash)) of
     {ok, Id} ->
-      dpo_server:add(Id, SessionId, self()),
-      lager:info([{kind,access}],"CONNECT ~p ~p~n", [Path, SessionId]),
-      rtmp_session:accept_connection(Session);
-    Other	->
-      ?D({check_hash_failed, Other}),
-      lager:info([{kind,access}],"LOGIN_REJECT wrong_hash ~p~n",[Hash]),
+      case dpo_server:add(Id, SessionId, self()) of
+        {error, _} ->
+          unhandled;
+        ok ->
+          ?ACCESS("CONNECT ~p ~p", [Path, SessionId]),
+          rtmp_session:accept_connection(Session)
+      end;
+    _Other	->
+      ?ACCESS("LOGIN_REJECT wrong_hash ~p", [Hash]),
       unhandled
   end;
 
@@ -66,6 +75,15 @@ extract_name(Name) ->
     _ -> Name
   end.
 
+-spec extract_name_with_qs(binary()) -> [{binary(), cow_qs:qs_vals()}].
+
+extract_name_with_qs(Name) ->
+  case binary:split(Name, <<"?">>) of
+    [Name] ->
+      {Name , []};
+    [Name1, QS] ->
+      {Name1, cow_qs:parse_qs(QS)}
+  end.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -87,8 +105,8 @@ cleanup_(_) ->
   dpo:stop().
 
 extract_name_test() ->
-  ?assertEqual(<<"path/name">>,extract_name(<<"path/name?var1=1&var2=2">>)),
-  ?assertEqual(<<"path/name">>,extract_name(<<"path/name">>)).
+  ?assertEqual({<<"path/name">>, [{<<"var1">>, <<"1">>}, {<<"var2">>, <<"2">>}]}, extract_name(<<"path/name?var1=1&var2=2">>)),
+  ?assertEqual({<<"path/name">>, []}, extract_name(<<"path/name">>)).
 
 
 publish_dpo_test_() ->

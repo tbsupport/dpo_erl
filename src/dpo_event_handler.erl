@@ -15,12 +15,12 @@
 %%% @end
 
 -module(dpo_event_handler).
--behaviour(gen_server).
--include_lib("dpo.hrl").
--include_lib("../include/erlyvideo.hrl").
+-behaviour(gen_event).
+-include_lib("erlyvideo/include/log.hrl").
+-include_lib("dpo/include/erlyvideo.hrl").
 
 -export([start_link/0, listen/0]).
--export([init/1, handle_call/3, handle_cast/2, handle_event/2, handle_info/2, terminate/2, code_change/3]).
+-export([init/1, handle_call/2, handle_cast/2, handle_event/2, handle_info/2, terminate/2, code_change/3]).
 
 start_link() ->
   ?I(start_event_sup),
@@ -66,11 +66,15 @@ handle_event(#erlyvideo_event{event = stream_stopped, stream_name = Name}, State
   dpo_server:stream_stopped(Name),
   {ok, State};
 
+handle_event(#erlyvideo_event{event = hls_idle, stream = Id}, State) ->
+  ?D({hls_idle, Id}),
+  dpo_server:hls_idle(Id),
+  {ok, State};
 
 handle_event(_Event, State) ->
   {ok, State}.
 
-handle_call(Request, _From, State) ->
+handle_call(Request, State) ->
   {ok, Request, State}.
 
 handle_cast(Request, State) ->

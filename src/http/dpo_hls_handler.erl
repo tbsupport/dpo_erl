@@ -9,9 +9,10 @@
 
 init(Req, Opts) ->
   Id = cowboy_req:binding(id, Req),
+  Name = cowboy_req:binding(name, Req),
   {Type, File} = validate_file(cowboy_req:binding(filename, Req)),
   Reply =
-    case dpo_server:get_hls_stream(Id) of
+    case dpo_server:get_hls_stream(Id, Name) of
       undefined ->
         cowboy_req:reply(404, Req);
       {ok, Worker} ->
@@ -20,7 +21,9 @@ init(Req, Opts) ->
             cowboy_req:reply(404, Req);
           Object ->
             cowboy_req:reply(200, headers(Type), Object, Req)
-        end
+        end;
+      {playlist, Playlist} ->
+        cowboy_req:reply(200, headers(Type), Playlist, Req)
     end,
   {ok, Reply, Opts}.
 

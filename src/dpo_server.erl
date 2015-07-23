@@ -5,24 +5,27 @@
 
 -module(dpo_server).
 -include_lib("dpo.hrl").
--include_lib("../include/rtmp.hrl").
--include_lib("../include/rtmp_session.hrl").
+-include_lib("dpo/include/rtmp.hrl").
+-include_lib("dpo/include/rtmp_session.hrl").
+-include_lib("erlyvideo/include/log.hrl").
+
 -behaviour(gen_server).
 
 -export([start_link/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
--export([add/3, finish/1, find/1, list/0, publish/1, config_reloaded/0]).
--export([stream_started/2, stream_stopped/1, user_disconnected/1, get_hls_stream/1]).
+-export([add/3, finish/1, find/1, list/0, publish/3, config_reloaded/0]).
+-export([stream_started/2, stream_stopped/1, user_disconnected/1]).
+-export([get_hls_stream/2, hls_idle/1]).
 -export([status/0]).
 
--define(T_STREAMS, dpo_streams).
--define(D_TRANSLATIONS, dets_translations).
+-define(DIR(Id), lists:flatten(io_lib:format("~s/~p", [ulitos_app:get_var(dpo, recording_dir, "."), Id]))).
+-define(FILENAME(Id, Name), iolist_to_binary(io_lib:format("~s/~s.flv", [?DIR(Id), Name]))).
 
 -record(state, {
   translations = #{} :: #{non_neg_integer() => #translation{}},
   sid_to_id = #{} :: #{non_neg_integer() => non_neg_integer()},
-  name_to_id = #{} :: #{binary() => non_neg_integer()}
+  name_to_id = #{} :: #{binary() => {non_neg_integer(), binary()}}
 }).
 
 
@@ -63,8 +66,8 @@ status() ->
 list() ->
   gen_server:call(?MODULE,{list}).
 
-publish(SessionId) ->
-  gen_server:call(?MODULE, {publish, SessionId}).
+publish(SessionId, Name, QS) ->
+  gen_server:call(?MODULE, {publish, SessionId, Name, QS}).
 
 %% @doc Add stream to whitelist.
 %% @end
@@ -101,10 +104,21 @@ user_disconnected(SessionId) ->
 %% @doc Get hls stream by id
 %% @end
 
--spec get_hls_stream(non_neg_integer()) -> {ok, pid()}.
+-spec get_hls_stream(non_neg_integer(), undefined | binary()) -> {ok, pid()}.
 
-get_hls_stream(Id) ->
-  gen_server:call(?MODULE, {get_hls_stream, Id}).
+get_hls_stream(Id, undefined) ->
+  gen_server:call(?MODULE, {get_hls_stream, Id});
+
+get_hls_stream(Id, Name) ->
+  gen_server:call(?MODULE, {get_hls_stream, Id, Name}).
+
+%% @doc Notify that hls is idle
+%% @end
+
+-spec hls_idle(non_neg_integer()) -> {ok, pid()}.
+
+hls_idle(Id) ->
+  gen_server:call(?MODULE, {hls_idle, Id}).
 
 %%%----------- gen_server handlers ------------%%%
 
@@ -116,7 +130,7 @@ handle_call({add, Id, SessionId, SessionPid}, _, #state{translations = Translati
     #translation{session_id = undefined} = Translation ->
       {reply, ok, State#state{translations = maps:put(Id, Translation#translation{session_id = SessionId, session_pid = SessionPid}, Translations), sid_to_id = maps:put(SessionId, Id, SidToId)}};
     #translation{} ->
-      {reply, {error, already_exist}, State}
+      {reply, {error, exist}, State}
   end;
 
 handle_call({find, Id}, _, #state{translations = Translations} = State) ->
@@ -126,21 +140,29 @@ handle_call({finish, Id}, _, #state{translations = Translations, sid_to_id = Sid
   case maps:get(Id, Translations, undefined) of
     undefined ->
       {reply, ok, State};
-    #translation{session_id = undefined} ->
+    #translation{session_id = undefined} = Translation ->
+      make_record(Translation),
       {reply, ok, State#state{translations = maps:remove(Id, Translations)}};
-    #translation{session_id = Sid, session_pid = SessionPid, filename = Name} ->
+    #translation{session_id = Sid, session_pid = SessionPid, streams = Streams} = Translation ->
+      make_record(Translation),
       (catch rtmp_session:reject_connection(SessionPid)),
-      {reply, ok, State#state{translations = maps:remove(Id, Translations), sid_to_id = maps:remove(Sid, SidToId), name_to_id = maps:remove(Name, NameToId)}}
+      Names = maps:fold(fun(_, #dpo_stream{filename = Filename}, Acc) -> [Filename|Acc] end, [], Streams),
+      NewNameToId = lists:foldl(fun maps:remove/2, NameToId, Names),
+      {reply, ok, State#state{translations = maps:remove(Id, Translations), sid_to_id = maps:remove(Sid, SidToId), name_to_id = NewNameToId}}
   end;
 
-handle_call({publish, SessionId}, _, #state{translations = Translations, sid_to_id = SidToId, name_to_id = NameToId} = State) ->
+handle_call({publish, SessionId, Name, QS}, _, #state{translations = Translations, sid_to_id = SidToId, name_to_id = NameToId} = State) ->
   Id = maps:get(SessionId, SidToId),
-  case maps:get(Id, Translations) of
-    #translation{filename = undefined} = Translation ->
-      Filename = lists:flatten(io_lib:format("~s/~p.flv", [ulitos_app:get_var(dpo, file_dir, "."), Id])),
-      {reply, Filename, State#state{translations = maps:put(Id, Translation#translation{filename = Filename}, Translations), name_to_id = maps:put(iolist_to_binary(Filename), Id, NameToId)}};
-    #translation{filename = Filename} ->
-      {reply, Filename, State}
+  #translation{streams = Streams} = Translation = maps:get(Id, Translations),
+  Filename = ?FILENAME(Id, Name),
+  case maps:get(Name, Streams, undefined) of
+    undefined ->
+      NewStreams = maps:put(Name, #dpo_stream{filename = Filename, options = QS}, Streams),
+      NewNameToId = maps:put(iolist_to_binary(Filename), {Id, Name}, NameToId),
+      {reply, Filename, State#state{translations = maps:put(Id, Translation#translation{streams = NewStreams}, Translations), name_to_id = NewNameToId}};
+    #dpo_stream{filename = Filename} = Stream ->
+      NewStreams = maps:put(Name, Stream#dpo_stream{options = QS}, Streams),
+      {reply, Filename, State#state{translations = maps:put(Id, Translation#translation{streams = NewStreams}, Translations)}}
   end;
 
 handle_call({list}, _ , #state{translations = Translations} = State) ->
@@ -150,42 +172,55 @@ handle_call({get_hls_stream, Id}, _From, #state{translations = Translations} = S
   case maps:get(Id, Translations, undefined) of
     undefined ->
       {reply, undefined, State};
-    #translation{media = undefined, hls = undefined} ->
+    Translation ->
+      {Reply, NewTranslation} = get_hls(Translation),
+      {reply, Reply, State#state{translations = maps:put(Id, NewTranslation, Translations)}}
+  end;
+
+handle_call({get_hls_stream, Id, Name}, _From, #state{translations = Translations} = State) ->
+  case maps:get(Id, Translations, undefined) of
+    undefined ->
       {reply, undefined, State};
-    #translation{media = Media, hls = undefined} = Translation->
-      {ok, Hls} = hls_server:add_stream(Media),
-      {reply, hls_server:get_stream(Hls), State#state{translations = maps:put(Id, Translation#translation{hls = Hls}, Translations)}};
-    #translation{media = Media, hls = Hls} = Translation ->
-      case hls_server:get_stream(Hls) of
+    #translation{streams = Streams} = Translation ->
+      case maps:get(Name, Streams, undefined) of
         undefined ->
-          {ok, NewHls} = hls_server:add_stream(Media),
-          {reply, hls_server:get_stream(NewHls), State#state{translations = maps:put(Id, Translation#translation{hls = NewHls}, Translations)}};
-        {ok, Pid} ->
-          {reply, {ok, Pid}, State}
+          {reply, undefined, State};
+        Stream ->
+          {Reply, NewStream} = get_hls(Stream),
+          NewStreams = maps:put(Name, NewStream, Streams),
+          NewTranslation = Translation#translation{streams = NewStreams},
+          {reply, Reply, State#state{translations = maps:put(Id, NewTranslation, Translations)}}
       end
   end;
+
+handle_call({hls_idle, _Id}, _From, #state{translations = _Translations} = State) ->
+  {reply, ok, State};
 
 handle_call(Req, _, State) ->
   {error, {unhandled, Req}, State}.
 
-handle_cast({stream_started, Name, Media}, #state{translations = Translations, name_to_id = NameToId} = State) ->
-  case maps:get(Name, NameToId, undefined) of
+handle_cast({stream_started, Filename, Media}, #state{translations = Translations, name_to_id = NameToId} = State) ->
+  case maps:get(Filename, NameToId, undefined) of
     undefined ->
       {noreply, State};
-    Id ->
-      lager:info([{kind,access}],"START_STREAM ~p~n", [Id]),
-      Translation = maps:get(Id, Translations),
-      {noreply, State#state{translations = maps:put(Id, Translation#translation{media = Media}, Translations)}}
+    {Id, Name} ->
+      ?ACCESS("START_STREAM ~p ~p", [Id, Name]),
+      Translation = #translation{streams = Streams} = maps:get(Id, Translations),
+      Stream = maps:get(Name, Streams),
+      NewStreams = maps:put(Name, Stream#dpo_stream{media = Media}, Streams),
+      {noreply, State#state{translations = maps:put(Id, Translation#translation{streams = NewStreams}, Translations)}}
   end;
 
-handle_cast({stream_stopped, Name}, #state{translations = Translations, name_to_id = NameToId} = State) ->
-  case maps:get(Name, NameToId, undefined) of
+handle_cast({stream_stopped, Filename}, #state{translations = Translations, name_to_id = NameToId} = State) ->
+  case maps:get(Filename, NameToId, undefined) of
     undefined ->
       {noreply, State};
-    Id ->
-      lager:info([{kind,access}],"STOP_STREAM ~p~n", [Id]),
-      Translation = maps:get(Id, Translations),
-      {noreply, State#state{translations = maps:put(Id, Translation#translation{media = undefined}, Translations)}}
+    {Id, Name} ->
+      ?ACCESS("STOP_STREAM ~p", [Id]),
+      Translation = #translation{streams = Streams} = maps:get(Id, Translations),
+      Stream  = maps:get(Name, Streams),
+      NewStreams = maps:put(Name, Stream#dpo_stream{media = undefined}, Streams),
+      {noreply, State#state{translations = maps:put(Id, Translation#translation{streams = NewStreams}, Translations)}}
   end;
 
 handle_cast({user_disconnected, SessionId}, #state{translations = Translations, sid_to_id = SidToId} = State) ->
@@ -193,9 +228,8 @@ handle_cast({user_disconnected, SessionId}, #state{translations = Translations, 
     undefined ->
       {noreply, State};
     Id ->
-      ?D({user_disconnected, SessionId}),
       Translation = maps:get(Id, Translations),
-      {noreply, State#state{translations = maps:put(Id, Translation#translation{session_id = undefined, session_pid = undefined, media = undefined}, Translations), sid_to_id = maps:remove(SessionId, SidToId)}}
+      {noreply, State#state{translations = maps:put(Id, Translation#translation{session_id = undefined, session_pid = undefined}, Translations), sid_to_id = maps:remove(SessionId, SidToId)}}
   end;
 
 handle_cast(Cast, State) ->
@@ -220,9 +254,74 @@ code_change(_, State, _) -> {ok, State}.
 init_http() ->
   Routes = [
     {"/api/dpo/translations/[:id]", [{id, int}], translations_handler, []},
-    {"/hls/dpo/:id/:filename", [{id, int}], dpo_hls_handler, []}
+    {"/hls/dpo/:id/[:name]/:filename", [{id, int}], dpo_hls_handler, []}
   ],
   ems_http:add_routes(Routes).
+
+get_hls(#dpo_stream{media = undefined, hls = undefined} = Stream) ->
+  {undefined, Stream};
+
+get_hls(#dpo_stream{media = undefined, hls = Hls} = Stream) ->
+  case hls_server:get_stream(Hls) of
+    undefined ->
+      {undefined, Stream#dpo_stream{hls = undefined}};
+    {ok, Pid} ->
+      {{ok, Pid}, Stream}
+  end;
+
+get_hls(#dpo_stream{media = Media, hls = undefined} = Stream) ->
+  {ok, Hls} = hls_server:add_stream(Media),
+  {hls_server:get_stream(Hls), Stream#dpo_stream{hls = Hls}};
+
+get_hls(#dpo_stream{media = Media, hls = Hls} = Stream) ->
+  case hls_server:get_stream(Hls) of
+    undefined ->
+      {ok, NewHls} = hls_server:add_stream(Media),
+      {hls_server:get_stream(NewHls), Stream#dpo_stream{hls = NewHls}};
+    {ok, Pid} ->
+      {{ok, Pid}, Stream}
+  end;
+
+get_hls(#translation{streams = Streams} = Translation) when map_size(Streams) == 0 ->
+  {undefined, Translation};
+
+get_hls(#translation{streams = Streams} = Translation) when map_size(Streams) == 1 ->
+  [{Name, Stream}] = maps:to_list(Streams),
+  {Reply, NewStream} = get_hls(Stream),
+  NewTranslation = Translation#translation{streams = maps:put(Name, NewStream, Streams)},
+  {Reply, NewTranslation};
+
+get_hls(#translation{streams = Streams} = Translation) ->
+  PlaylistStart = <<"#EXTM3U\n">>,
+  Playlist =
+    maps:fold(
+      fun(Name, Stream, PL) -> StreamInf = stream_inf(Name, Stream), <<PL/binary, StreamInf/binary>> end,
+      PlaylistStart,
+      Streams
+    ),
+  {{playlist, Playlist}, Translation}.
+
+stream_inf(Name, #dpo_stream{options = Options}) ->
+  BandWidth = proplists:get_value(<<"totalDatarate">>, Options, <<"640">>),
+  <<"#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=", BandWidth/binary, "000\n", Name/binary, "/playlist.m3u8\n">>.
+
+make_record(#translation{streams = Streams}) when map_size(Streams) == 0 ->
+  ok;
+
+make_record(#translation{id = Id, streams = Streams}) ->
+  MaxFun =
+    fun
+      (_, #dpo_stream{options = Options, filename = Filename}, {CurrentFilename, CurrentBandWidth}) ->
+        BandWidth = binary_to_integer(proplists:get_value(<<"totalDatarate">>, Options, <<"0">>)),
+        if
+          BandWidth > CurrentBandWidth -> {Filename, BandWidth};
+          true -> {CurrentFilename, CurrentBandWidth}
+        end
+    end,
+  {Filename, _} = maps:fold(MaxFun, {<<"">>, -1}, Streams),
+  file:rename(Filename, ?FILENAME(Id, <<"stream">>)),
+  ?D({Filename, ?FILENAME(Id, <<"stream">>)}),
+  dpo_saver:save_recording(Id, ?DIR(Id)).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").

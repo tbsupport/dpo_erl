@@ -63,25 +63,25 @@ resource_exists(Req, #state{id = Id} = State) ->
 
 translation_status(Req, #state{id = undefined} = State) ->
   Translations =
-    lists:map(
-      fun(#translation{id = Id, media = undefined}) -> {[{id, Id}, {live, false}]};
-         (#translation{id = Id}) -> {[{id, Id}, {live, true}]}
-      end,
-      dpo_server:list()),
-  {jiffy:encode(Translations), cowboy_req:set_resp_header(<<"Content-Type">>, <<"application/json">>, Req), State};
+    lists:map(fun(#translation{id = Id, streams = Streams}) -> maps:fold(stream_fun(Id), [], Streams) end, dpo_server:list()),
+  {jiffy:encode(lists:flatten(Translations)), cowboy_req:set_resp_header(<<"Content-Type">>, <<"application/json">>, Req), State};
 
-translation_status(Req, #state{translation = #translation{id = Id, media = undefined}} = State) ->
-  {jiffy:encode({[{id, Id}, {live, false}]}), cowboy_req:set_resp_header(<<"Content-Type">>, <<"application/json">>, Req), State};
-
-translation_status(Req, #state{translation = #translation{id = Id}} = State) ->
-  {jiffy:encode({[{id, Id}, {live, true}]}), cowboy_req:set_resp_header(<<"Content-Type">>, <<"application/json">>, Req), State}.
+translation_status(Req, #state{translation = #translation{id = Id, streams = Streams}} = State) ->
+  {jiffy:encode(maps:fold(stream_fun(Id), [], Streams)), cowboy_req:set_resp_header(<<"Content-Type">>, <<"application/json">>, Req), State}.
 
 delete_resource(Req, #state{id = Id} = State) ->
   dpo_server:finish(Id),
   {true, Req, State}.
 
-delete_completed(Req, #state{translation = #translation{filename = Filename}} = State) ->
+delete_completed(Req, #state{} = State) ->
   Resp = cowboy_req:set_resp_header(<<"content-type">>, <<"application/json">>, Req),
-  {true, cowboy_req:set_resp_body(jiffy:encode({[{status, ok}, {filename, iolist_to_binary(Filename)}]}), Resp), State}.
+  {true, cowboy_req:set_resp_body(jiffy:encode({[{status, ok}]}), Resp), State}.
 
 
+%%private
+
+stream_fun(Id) ->
+  fun
+    (Name, #dpo_stream{media = undefined}, Acc) -> [{[{id, Id}, {name, Name}, {live, false}]} | Acc];
+    (Name, #dpo_stream{}, Acc) -> [{[{id, Id}, {name, Name}, {live, true}]} | Acc]
+  end.
