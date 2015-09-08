@@ -19,8 +19,8 @@
 -export([get_hls_stream/2, hls_idle/1]).
 -export([status/0]).
 
--define(DIR(Id), lists:flatten(io_lib:format("~s/~p", [ulitos_app:get_var(dpo, recording_dir, "."), Id]))).
--define(FILENAME(Id, Name), iolist_to_binary(io_lib:format("~s/~s.flv", [?DIR(Id), Name]))).
+-define(DIR(Id), lists:flatten(io_lib:format("~s/~p/", [ulitos_app:get_var(dpo, recording_dir, "."), Id]))).
+-define(FILENAME(Id, Name), iolist_to_binary(io_lib:format("~s~s.flv", [?DIR(Id), Name]))).
 
 -record(state, {
   translations = #{} :: #{non_neg_integer() => #translation{}},
